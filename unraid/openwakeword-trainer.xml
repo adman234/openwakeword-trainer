@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>openwakeword-trainer</Name>
+  <Repository>ghcr.io/adman234/openwakeword-trainer:latest</Repository>
+  <Registry>https://github.com/adman234/openwakeword-trainer/pkgs/container/openwakeword-trainer</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/adman234/openwakeword-trainer/issues</Support>
+  <Project>https://github.com/adman234/openwakeword-trainer</Project>
+  <Overview>All-in-one openWakeWord trainer with a web UI. Type a wake word, record your own voice in the browser, then train a Home Assistant compatible .tflite and .onnx model. Kokoro TTS runs inside the container and generates thousands of blended voices, so nothing external is needed. Uses an NVIDIA GPU when one is passed through (install the Nvidia Driver plugin), otherwise everything runs on the CPU, just slower. Open the WebUI over HTTPS so the browser allows microphone recording. The first training run downloads about 19 GB of shared training data into the data folder.</Overview>
+  <Category>HomeAutomation: Tools: AI:</Category>
+  <WebUI>https://[IP]:[PORT:8443]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/adman234/openwakeword-trainer/main/unraid/openwakeword-trainer.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/adman234/openwakeword-trainer/main/unraid/icon.png</Icon>
+  <ExtraParams>--runtime=nvidia --restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>For GPU training install the Nvidia Driver plugin. No GPU? Remove --runtime=nvidia from Extra Parameters and it runs on the CPU.</Requires>
+  <Config Name="HTTPS WebUI port" Target="8443" Default="8443" Mode="tcp" Description="Web UI over HTTPS with a self-signed certificate. Browsers only allow the microphone over HTTPS, so use this one. Accept the certificate warning once." Type="Port" Display="always" Required="true" Mask="false">8443</Config>
+  <Config Name="HTTP WebUI port" Target="8080" Default="8080" Mode="tcp" Description="Plain HTTP. Point a reverse proxy with a real certificate here. Microphone recording will not work over plain HTTP." Type="Port" Display="always" Required="false" Mask="false">8080</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/openwakeword-trainer" Mode="rw" Description="Wake word projects, your recordings, cached clips and about 19 GB of downloaded training data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/openwakeword-trainer</Config>
+  <Config Name="Model output" Target="/output" Default="/mnt/user/appdata/openwakeword-trainer/output" Mode="rw" Description="Finished .tflite and .onnx models are copied here after each training run." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/openwakeword-trainer/output</Config>
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="Which GPU to use: all, or a GPU UUID from the Nvidia Driver plugin page." Type="Variable" Display="always" Required="false" Mask="false">all</Config>
+  <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="Leave as compute,utility." Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID that owns created files (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID that owns created files (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="Certificate hostnames" Target="CERT_HOSTS" Default="" Mode="" Description="Optional comma separated IPs or hostnames to put in the self-signed certificate, e.g. 192.168.1.10,tower.local. Delete the certs folder in Data to regenerate." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Hugging Face token" Target="HF_TOKEN" Default="" Mode="" Description="Optional. Only needed if Hugging Face rate limits the training data download." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+</Container>
