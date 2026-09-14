@@ -193,7 +193,8 @@ class Validator:
             "threshold": threshold,
             "recall_tts": recall_tts,
             "recall_real": recall_real,
-            "recall": recall_tts if recall_real is None else (recall_tts + recall_real) / 2,
+            # Held-out recordings are usually only a handful of clips, so they get a quarter of the weight
+            "recall": recall_tts if recall_real is None else 0.75 * recall_tts + 0.25 * recall_real,
             "similar_phrase_accept": float(np.mean(scores["neg"] >= threshold)) if len(scores["neg"]) else 0.0,
             "fp_per_hour": count_activations(scores["fp"], threshold) / max(self.hours, 1e-6),
         }
@@ -313,8 +314,9 @@ def train(data: TrainingData, settings: dict, device, log, progress, should_stop
                 progress(global_step / total_steps, f"Step {global_step:,} of {total_steps:,}{loss_txt}, about {eta / 60:.0f} min left")
         done += n_steps
     acav.close()
-    negative_hours = acav.blocks_read * acav.block_rows * 16 * FRAME_SECONDS / 3600
-    log(f"Read about {negative_hours:,.0f} hours of negative speech features during training")
+    rows_read = acav.blocks_read * acav.block_rows
+    log(f"Negative speech features: read {rows_read * 16 * FEATURE_DIM * 2 / 1e9:,.1f} GB, "
+        f"{rows_read / len(acav.data):.1f} passes over the 2,000 hour set")
 
     ranked = sorted(checkpoints, key=lambda c: _selection_key(c[0], target_fp), reverse=True)
     top = ranked[:5]
