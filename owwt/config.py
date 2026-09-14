@@ -36,7 +36,7 @@ PRESETS = {
         "description": "Checks that everything works and gives a rough model.",
         "n_positive": 2000,
         "n_negative": 2000,
-        "steps": 8000,
+        "steps": 20000,
         "layer_size": 32,
     },
     "standard": {
@@ -44,7 +44,7 @@ PRESETS = {
         "description": "A good everyday model. Recommended.",
         "n_positive": 10000,
         "n_negative": 10000,
-        "steps": 25000,
+        "steps": 50000,
         "layer_size": 32,
     },
     "max": {
@@ -52,7 +52,7 @@ PRESETS = {
         "description": "More voices and longer training for the fewest false triggers.",
         "n_positive": 25000,
         "n_negative": 25000,
-        "steps": 50000,
+        "steps": 100000,
         "layer_size": 64,
     },
 }

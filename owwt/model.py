@@ -86,15 +86,16 @@ class AcavStream:
     disks), swapped into a rolling pool, and every batch samples that pool at random.
     """
 
-    def __init__(self, path, n_frames: int, device, block_rows: int = 1024, pool_blocks: int = 48, seed: int = 0):
+    def __init__(self, path, n_frames: int, device, block_rows: int = 1024, pool_blocks: int = 128, seed: int = 0):
         self.data = np.load(path, mmap_mode="r")
         self.n_frames = n_frames
         self.device = device
         self.block_rows = block_rows
         self.rng = np.random.default_rng(seed)
         self.cursor = int(self.rng.integers(0, max(1, len(self.data) - block_rows)))
-        self.q = queue.Queue(maxsize=8)
+        self.q = queue.Queue(maxsize=16)
         self.stopped = False
+        self.blocks_read = pool_blocks
         blocks = [self._read_block() for _ in range(pool_blocks)]
         self.block_windows = len(blocks[0])
         self.pool_blocks = pool_blocks
@@ -120,17 +121,20 @@ class AcavStream:
             while not self.stopped:
                 try:
                     self.q.put(blk, timeout=1)
+                    self.blocks_read += 1
                     break
                 except queue.Full:
                     continue
 
     def sample(self, n: int) -> torch.Tensor:
-        try:
-            blk = self.q.get_nowait()
+        # Swap in every block the reader has ready (up to 4), so the pool stays as fresh as the disk allows
+        for _ in range(4):
+            try:
+                blk = self.q.get_nowait()
+            except queue.Empty:
+                break
             slot = int(self.rng.integers(0, self.pool_blocks))
             self.pool[slot * self.block_windows:(slot + 1) * self.block_windows] = torch.from_numpy(blk).to(self.device)
-        except queue.Empty:
-            pass
         idx = torch.randint(0, self.pool.shape[0], (n,), device=self.device)
         return self.pool[idx].float()
 
@@ -194,20 +198,32 @@ class Validator:
             "fp_per_hour": count_activations(scores["fp"], threshold) / max(self.hours, 1e-6),
         }
 
-    def evaluate(self, model, threshold: float = 0.5) -> dict:
-        return self.metrics(self.raw_scores(model), threshold)
+    def evaluate(self, model, target_fp: float) -> dict:
+        """Metrics at 0.5, plus recall at the lowest threshold that meets the false activation target.
+        The threshold is adjustable, so recall at the target is what checkpoints are compared on."""
+        scores = self.raw_scores(model)
+        m = self.metrics(scores, 0.5)
+        rows = [self.metrics(scores, t) for t in THRESHOLDS]
+        at = next((r for r in rows if r["threshold"] >= 0.3 and r["fp_per_hour"] <= target_fp), None)
+        if at is None:
+            at = min(rows, key=lambda r: (r["fp_per_hour"], -r["recall"]))
+        m.update(target_threshold=at["threshold"], target_recall=at["recall"],
+                 target_fp_per_hour=at["fp_per_hour"], target_met=at["fp_per_hour"] <= target_fp)
+        return m
 
     def threshold_table(self, model, target_fp: float) -> tuple[list[dict], float]:
         scores = self.raw_scores(model)
-        rows = [self.metrics(scores, round(float(t), 2)) for t in np.arange(0.1, 0.951, 0.05)]
+        rows = [self.metrics(scores, t) for t in THRESHOLDS]
         ok = [r for r in rows if r["fp_per_hour"] <= target_fp and r["threshold"] >= 0.3]
         recommended = ok[0]["threshold"] if ok else min(rows, key=lambda r: (r["fp_per_hour"], -r["threshold"]))["threshold"]
         return rows, recommended
 
 
+THRESHOLDS = [round(float(t), 2) for t in np.arange(0.1, 0.951, 0.05)] + [0.97, 0.99]
+
+
 def _selection_key(m: dict, target_fp: float) -> tuple:
-    feasible = m["fp_per_hour"] <= target_fp
-    return (feasible, m["recall"] if feasible else -m["fp_per_hour"], m["recall"] if not feasible else -m["fp_per_hour"])
+    return (m["target_met"], m["target_recall"], -m["target_fp_per_hour"])
 
 
 def train(data: TrainingData, settings: dict, device, log, progress, should_stop=lambda: False):
@@ -279,14 +295,15 @@ def train(data: TrainingData, settings: dict, device, log, progress, should_stop
                     loss_ema = loss.item() if loss_ema is None else 0.8 * loss_ema + 0.2 * loss.item()
 
             if step in eval_at:
-                m = validator.evaluate(model)
+                m = validator.evaluate(model, target_fp)
                 m.update(step=done + step, phase=phase + 1)
                 history.append(m)
                 best_fp = min(best_fp, m["fp_per_hour"])
                 checkpoints.append((m, copy.deepcopy(model.state_dict())))
                 real = f", your voice {m['recall_real']:.0%}" if m["recall_real"] is not None else ""
-                log(f"  step {done + step}: recall {m['recall_tts']:.1%}{real}, "
-                    f"similar phrases accepted {m['similar_phrase_accept']:.1%}, false activations {m['fp_per_hour']:.2f}/hour")
+                log(f"  step {done + step}: at 0.5 recall {m['recall_tts']:.1%}{real}, similar phrases {m['similar_phrase_accept']:.1%}, "
+                    f"false {m['fp_per_hour']:.2f}/h | at {m['target_threshold']}: recall {m['target_recall']:.1%}, "
+                    f"false {m['target_fp_per_hour']:.2f}/h")
 
             global_step = done + step
             if global_step % 200 == 0:
@@ -296,19 +313,22 @@ def train(data: TrainingData, settings: dict, device, log, progress, should_stop
                 progress(global_step / total_steps, f"Step {global_step:,} of {total_steps:,}{loss_txt}, about {eta / 60:.0f} min left")
         done += n_steps
     acav.close()
+    negative_hours = acav.blocks_read * acav.block_rows * 16 * FRAME_SECONDS / 3600
+    log(f"Read about {negative_hours:,.0f} hours of negative speech features during training")
 
     ranked = sorted(checkpoints, key=lambda c: _selection_key(c[0], target_fp), reverse=True)
     top = ranked[:5]
     averaged = {k: sum(sd[k].float() for _, sd in top) / len(top) for k in top[0][1]}
     model.load_state_dict(averaged)
-    m_avg = validator.evaluate(model)
+    m_avg = validator.evaluate(model, target_fp)
     best_m, best_sd = ranked[0]
     if _selection_key(m_avg, target_fp) >= _selection_key(best_m, target_fp):
         chosen, how = m_avg, f"average of the best {len(top)} checkpoints"
     else:
         model.load_state_dict(best_sd)
         chosen, how = best_m, f"best single checkpoint (step {best_m['step']})"
-    log(f"Selected {how}: recall {chosen['recall_tts']:.1%}, false activations {chosen['fp_per_hour']:.2f}/hour")
+    log(f"Selected {how}: at threshold {chosen['target_threshold']} recall {chosen['target_recall']:.1%} "
+        f"with {chosen['target_fp_per_hour']:.2f} false activations/hour")
 
     table, recommended = validator.threshold_table(model, target_fp)
     return model.eval(), {"selected": how, "metrics_at_0_5": chosen, "thresholds": table,

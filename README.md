@@ -74,11 +74,11 @@ Finished models are also copied to `/output` automatically. ESPHome devices that
 
 | Preset | Generated clips | Steps | Time with an RTX 4070 class GPU |
 | --- | --- | --- | --- |
-| Quick test | 2,000 + 2,000 | 8,000 | about 10 minutes |
-| Standard | 10,000 + 10,000 | 25,000 | about 35 minutes |
-| Maximum | 25,000 + 25,000 | 50,000 | about 1.5 hours |
+| Quick test | 2,000 + 2,000 | 20,000 | about 10 minutes |
+| Standard | 10,000 + 10,000 | 50,000 | about 30 minutes |
+| Maximum | 25,000 + 25,000 | 100,000 | about 1.5 hours |
 
-Most of the time goes into Kokoro generating clips, and those are cached: retraining after adding recordings or changing training settings skips straight to the fast parts. On CPU only, expect several times longer (Kokoro is around 0.2 s per clip on a modern desktop CPU).
+Most of the time goes into Kokoro generating clips, and those are cached: retraining after adding recordings or changing training settings skips straight to the fast parts, which take about 10 minutes. On CPU only, expect several times longer (Kokoro is around 0.2 s per clip on a modern desktop CPU).
 
 Everything is adjustable under *Advanced settings*: clip counts, steps, model size, target false activations per hour, negative weighting, how much weight your recordings get, and which voices are used.
 
