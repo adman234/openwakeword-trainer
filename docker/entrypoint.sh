@@ -21,7 +21,7 @@ if [ -n "${PUID:-}" ] && [ -n "${PGID:-}" ] && [ "$(id -u)" = "0" ] && [ "$PUID"
   export HOME="$DATA_DIR/cache/home" USER=wakeword
   mkdir -p "$HOME"
   find "$DATA_DIR" "$OUTPUT_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) -exec chown "$PUID:$PGID" {} + 2>/dev/null || true
-  exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups python -m owwt
+  exec python -c 'import os; os.setgroups([]); os.setgid(int(os.environ["PGID"])); os.setuid(int(os.environ["PUID"])); os.execvp("python", ["python", "-m", "owwt"])'
 fi
 
 exec python -m owwt
