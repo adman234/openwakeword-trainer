@@ -830,13 +830,13 @@ async function tabTrain(project, el) {
 
   const fillPlaceholders = () => {
     const preset = s.presets[selectedPreset(el)];
-    $$("[data-key]", el).forEach((input) => {
+    $$(".adv-grid [data-key]", el).forEach((input) => {
       if (input.tagName === "INPUT") input.placeholder = preset[input.dataset.key] ?? s.advanced_defaults[input.dataset.key] ?? "";
     });
   };
   const collect = () => {
     const advanced = {};
-    $$("[data-key]", el).forEach((input) => {
+    $$(".adv-grid [data-key]", el).forEach((input) => {
       const v = input.value.trim();
       if (v !== "") advanced[input.dataset.key] = input.tagName === "SELECT" ? v : Number(v);
     });
@@ -851,9 +851,9 @@ async function tabTrain(project, el) {
   };
   const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => save().catch((e) => toast(e.message, "error")), 500); };
   bindPresetCards(el, () => { fillPlaceholders(); saveSoon(); });
-  $$("[data-key]", el).forEach((input) => (input.onchange = saveSoon));
+  $$(".adv-grid [data-key]", el).forEach((input) => (input.onchange = saveSoon));
   $("#publish", el).onchange = saveSoon;
-  $("#adv-reset", el).onclick = () => { $$("[data-key]", el).forEach((i) => (i.value = i.tagName === "SELECT" ? "all" : "")); saveSoon(); };
+  $("#adv-reset", el).onclick = () => { $$(".adv-grid [data-key]", el).forEach((i) => (i.value = i.tagName === "SELECT" ? "all" : "")); saveSoon(); };
   fillPlaceholders();
 
   async function startTraining() {
@@ -901,8 +901,8 @@ async function tabTrain(project, el) {
     const mine = j.kind === "train" && j.project_id === project.id;
     const other = j.running && !mine;
     const key = `${j.id}|${j.running}|${j.state}|${!!j.stages?.length}`;
-    if (area.dataset.key !== key) {
-      area.dataset.key = key;
+    if (area.dataset.render !== key) {
+      area.dataset.render = key;
       const title = j.running ? "Training" : { done: "Training finished", failed: "Training failed", cancelled: "Training cancelled", interrupted: "Training interrupted" }[j.state] || "Training";
       area.innerHTML = `
         <div class="train-action">
