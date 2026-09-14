@@ -29,12 +29,24 @@ def _read_status() -> dict:
         return {}
 
 
-def _write_status(status: dict):
+def _write_status(status: dict, required: bool = True):
+    """Atomically replace status.json. Retries briefly because the web process may be reading it at that
+    moment (Windows refuses to replace an open file). Progress updates pass required=False, so a missed
+    write never takes down a training run."""
     JOB_DIR.mkdir(parents=True, exist_ok=True)
     status["updated_at"] = time.time()
     tmp = STATUS_FILE.with_name(f"status.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(status))
-    os.replace(tmp, STATUS_FILE)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, STATUS_FILE)
+            return
+        except PermissionError:
+            if attempt == 19:
+                if required:
+                    raise
+                return
+            time.sleep(0.05)
 
 
 def _pid_alive(pid) -> bool:
@@ -72,7 +84,7 @@ class JobReporter:
         now = time.time()
         if now - self._last_write > 0.5 or fraction >= 1.0:
             self._last_write = now
-            _write_status(self.status)
+            _write_status(self.status, required=False)
 
     def set(self, **values):
         self.status.update(values)
