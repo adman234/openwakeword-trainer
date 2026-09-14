@@ -30,6 +30,9 @@ FRAME_SECONDS = 0.08  # one openWakeWord embedding every 80 ms
 
 RECORDING_KINDS = ("positive", "negative", "background")
 
+# openwakeword: models for the Home Assistant openWakeWord add-on. microwakeword: on-device models for ESPHome.
+MODEL_TYPES = ("openwakeword", "microwakeword")
+
 PRESETS = {
     "quick": {
         "label": "Quick test",
@@ -38,6 +41,7 @@ PRESETS = {
         "n_negative": 2000,
         "steps": 20000,
         "layer_size": 32,
+        "micro_steps": 5000,
     },
     "standard": {
         "label": "Standard",
@@ -46,6 +50,7 @@ PRESETS = {
         "n_negative": 10000,
         "steps": 50000,
         "layer_size": 32,
+        "micro_steps": 20000,
     },
     "max": {
         "label": "Maximum",
@@ -54,6 +59,7 @@ PRESETS = {
         "n_negative": 25000,
         "steps": 100000,
         "layer_size": 64,
+        "micro_steps": 40000,
     },
 }
 
@@ -63,6 +69,7 @@ ADVANCED_DEFAULTS = {
     "real_weight": 0.25,
     "voices": "all",
     "n_blocks": 1,
+    "micro_target_faph": 0.5,
 }
 
 ADVANCED_LIMITS = {
@@ -74,6 +81,8 @@ ADVANCED_LIMITS = {
     "target_fp_per_hour": (0.01, 10),
     "real_weight": (0, 0.9),
     "n_blocks": (1, 4),
+    "micro_steps": (1000, 200000),
+    "micro_target_faph": (0.01, 10),
 }
 
 

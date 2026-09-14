@@ -34,10 +34,49 @@ ASSETS = [
      "description": "11 hours of speech, music and noise used to measure false activations per hour."},
     {"id": "acav", "label": "Negative speech (2,000 hours)", "size_bytes": 17_280_000_128,
      "description": "Pre-computed features from 2,000 hours of ACAV100M audio. This is what teaches the model what is NOT the wake word."},
+    {"id": "microwakeword", "label": "ESPHome negative data", "size_bytes": 5_709_958_106, "optional": True,
+     "description": "Speech, noise and dinner party spectrograms from microWakeWord. Only needed for ESPHome models, and downloaded automatically the first time you train one."},
 ]
+
+MICRO_URL = f"{HF}/datasets/kahrendt/microwakeword/resolve/main/"
+MICRO_DIR = DOWNLOADS_DIR / "microwakeword"
+MICRO_SETS = {"dinner_party": 444_310_142, "dinner_party_eval": 82_329_019,
+              "no_speech": 2_000_317_854, "speech": 3_183_001_091}
+
+
+def micro_ready() -> bool:
+    return all((MICRO_DIR / name / ".complete").exists() for name in MICRO_SETS)
+
+
+def ensure_microwakeword(report):
+    """Download and unpack microWakeWord's negative spectrogram sets. report(fraction, message)."""
+    import zipfile
+
+    total = sum(MICRO_SETS.values())
+    done = 0
+    for name, size in MICRO_SETS.items():
+        target = MICRO_DIR / name
+        if (target / ".complete").exists():
+            done += size
+            continue
+        zip_path = MICRO_DIR / f"{name}.zip"
+        if not zip_path.exists():
+            download(MICRO_URL + zip_path.name, zip_path,
+                     progress=lambda d, t, base=done: report((base + d) / total,
+                                                            f"ESPHome negative data: {(base + d) / 1e9:.1f} of {total / 1e9:.1f} GB"))
+        report((done + size) / total, f"Unpacking ESPHome negative data: {name}")
+        shutil.rmtree(target, ignore_errors=True)
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(MICRO_DIR, [m for m in z.namelist() if not m.startswith("__MACOSX") and not m.endswith(".DS_Store")])
+        (target / ".complete").touch()
+        zip_path.unlink()
+        done += size
+    report(1.0, "ESPHome negative data ready")
 
 
 def _ready(asset_id: str) -> bool:
+    if asset_id == "microwakeword":
+        return micro_ready()
     if asset_id == "rirs":
         return (RIR_DIR / ".complete").exists()
     if asset_id == "background":
@@ -62,11 +101,12 @@ def status() -> list[dict]:
 
 
 def all_ready() -> bool:
-    return all(_ready(a["id"]) for a in ASSETS)
+    """True when everything openWakeWord training needs is present (optional ESPHome data excluded)."""
+    return all(_ready(a["id"]) for a in ASSETS if not a.get("optional"))
 
 
 def missing() -> list[str]:
-    return [a["label"] for a in ASSETS if not _ready(a["id"])]
+    return [a["label"] for a in ASSETS if not a.get("optional") and not _ready(a["id"])]
 
 
 def _headers():
@@ -174,6 +214,13 @@ def custom_background_files(extra_dirs=()) -> list[Path]:
 
 def rir_paths() -> list[str]:
     return sorted(str(p) for p in RIR_DIR.glob("*.wav"))
+
+
+def ensure_augmentation(report):
+    """Just the room acoustics and background audio, which microWakeWord-only runs need."""
+    ensure_rirs(lambda i, n: report(0.1 * i / n, f"Room acoustics: {i} of {n} files"))
+    ensure_background(lambda i, n: report(0.1 + 0.9 * i / n, f"Background sounds: part {min(int(i) + 1, n)} of {n}"))
+    report(1.0, "Room acoustics and background sounds ready")
 
 
 def ensure_all(report):

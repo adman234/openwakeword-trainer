@@ -14,6 +14,7 @@ Nothing external is needed: [Kokoro TTS](https://huggingface.co/hexgrad/Kokoro-8
 - **Realistic augmentation**: 270 real room impulse responses, 2.5 hours of AudioSet background audio, EQ, pitch shifts, noise, level changes, and your own background recordings.
 - **Honest evaluation**: false activations per hour on openWakeWord's 11 hour validation set, recall on held-out voices and held-out recordings of you, a per-clip score list, and a recommended threshold.
 - **Exports** `.tflite` (Home Assistant openWakeWord add-on) and `.onnx`, both verified numerically against the trained model.
+- **ESPHome on-device models** *(optional)*: also trains a [microWakeWord](https://github.com/kahrendt/microWakeWord) model with its JSON manifest, and serves both over HTTP so ESPHome YAML can point straight at the container.
 - **NVIDIA GPU** for Kokoro, feature extraction and training, with automatic CPU fallback.
 
 ## Install on Unraid
@@ -68,7 +69,23 @@ Leave out `--gpus all` to run on the CPU.
    2. Restart the **openWakeWord** add-on.
    3. **Settings › Voice assistants**, open your assistant and choose the new wake word.
 
-Finished models are also copied to `/output` automatically. ESPHome devices that run wake word detection on the device itself use microWakeWord, which is a different model format.
+Finished models are also copied to `/output` automatically.
+
+### ESPHome on-device wake word (microWakeWord)
+
+ESPHome devices that detect the wake word themselves (ESP32-S3 devices such as the Home Assistant Voice PE) can't use the openWakeWord `.tflite`. They need a microWakeWord model plus a JSON manifest.
+
+1. On the **Train** tab, under *What to build*, tick **ESPHome on-device (microWakeWord)**. You can build it alongside the Home Assistant model or on its own. Both reuse the same Kokoro clips and recordings.
+2. Train. The first ESPHome run downloads 5.7 GB of microWakeWord's negative spectrograms. microWakeWord training runs on the CPU and takes roughly 30 to 90 minutes depending on the preset.
+3. The **Download** tab shows the `.json` and `.tflite`, the recommended `probability_cutoff` (chosen from a streaming false accept test on dinner party recordings), and a YAML snippet. The container serves the published files, so your device config can simply use:
+   ```yaml
+   micro_wake_word:
+     models:
+       - model: http://YOUR-SERVER-IP:8080/esphome/hey_robo_joe.json
+   ```
+   ESPHome downloads the model when it compiles the firmware. Adjust sensitivity with `probability_cutoff: 95%` under the model. If the device logs that it can't allocate tensors, raise `tensor_arena_size` in the JSON.
+
+The live test in the browser uses the Home Assistant model, so tick both if you want to try the wake word before flashing a device.
 
 ### Presets
 
@@ -112,7 +129,7 @@ Everything is adjustable under *Advanced settings*: clip counts, steps, model si
 │   ├── recordings/{positive,negative,background}/   your clips
 │   ├── work/                                         generated clips and cached features (safe to delete)
 │   └── runs/<timestamp>/                             .tflite, .onnx and report.json
-├── downloads/        shared training data (about 19 GB)
+├── downloads/        shared training data (about 19 GB, plus 5.7 GB once you build an ESPHome model)
 ├── background/       drop your own background audio here to use it for every wake word
 └── certs/            self-signed HTTPS certificate (delete to regenerate)
 ```
@@ -139,6 +156,7 @@ docker build --build-arg TORCH_CUDA=cu126 -t openwakeword-trainer:cu126 .
 
 - [openWakeWord](https://github.com/dscripka/openWakeWord) by David Scripka: model architecture, feature models, training recipe and the pre-computed ACAV100M and validation features.
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad, with the [misaki](https://github.com/hexgrad/misaki) G2P.
+- [microWakeWord](https://github.com/kahrendt/microWakeWord) by Kevin Ahrendt: the ESPHome model, trainer and negative spectrogram datasets.
 - [MIT environmental impulse responses](https://huggingface.co/datasets/davidscripka/MIT_environmental_impulse_responses) and [AudioSet](https://huggingface.co/datasets/agkphysics/AudioSet) for augmentation.
 
 The downloaded datasets have their own licenses; check them before any commercial use of trained models.

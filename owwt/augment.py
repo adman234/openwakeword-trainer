@@ -82,7 +82,8 @@ class Augmenter:
         wet = fftconvolve(x, rir)[peak:peak + len(x)]
         return (wet * np.sqrt(_power(x) / (_power(wet) + 1e-12))).astype(np.float32)
 
-    def speech(self, clip: np.ndarray, total_length: int, rng: np.random.Generator, align: str = "end") -> np.ndarray:
+    def speech(self, clip: np.ndarray, total_length: int, rng: np.random.Generator, align: str = "end",
+               end_jitter: tuple = (0.0, 0.2)) -> np.ndarray:
         x = np.asarray(clip, dtype=np.float32)
         if rng.random() < 0.25:
             # Pitch and tempo shift together by resampling, up to two semitones either way
@@ -100,7 +101,7 @@ class Augmenter:
         else:
             out = np.zeros(n, dtype=np.float32)
             if align == "end":
-                start = max(0, n - len(x) - int(rng.uniform(0, 0.2) * SR))
+                start = max(0, n - len(x) - int(rng.uniform(*end_jitter) * SR))
             else:
                 start = int(rng.integers(0, n - len(x) + 1))
             out[start:start + len(x)] = x
@@ -154,10 +155,41 @@ def init_worker(rir_paths, bank_paths):
 
 
 def augment_task(task) -> np.ndarray:
-    """task = (source, total_length, align, seed). source is a wav path, an array, or None for noise only."""
-    source, total_length, align, seed = task
+    """task = (source, total_length, align, seed[, options]). source is a wav path, an array, or None for noise only.
+
+    options may set "jitter" (min, max seconds between the end of the speech and the end of the clip) and
+    "micro_frames" to return microWakeWord spectrogram features (the last N frames, or all of them when
+    N is None) instead of audio.
+    """
+    source, total_length, align, seed = task[:4]
+    options = task[4] if len(task) > 4 else {}
     rng = np.random.default_rng(seed)
     if source is None:
-        return _AUGMENTER.noise_only(total_length, rng)
-    clip = read_wav(source) if isinstance(source, str) else source
-    return _AUGMENTER.speech(clip, total_length, rng, align)
+        audio = _AUGMENTER.noise_only(total_length, rng)
+    else:
+        clip = read_wav(source) if isinstance(source, str) else source
+        audio = _AUGMENTER.speech(clip, total_length, rng, align, tuple(options.get("jitter", (0.0, 0.2))))
+    if "micro_frames" in options:
+        features = micro_features(audio)
+        keep = options["micro_frames"]
+        return features[-keep:] if keep else features
+    return audio
+
+
+MICRO_FEATURE_SCALE = 0.0390625  # microWakeWord stores the frontend output as unscaled uint16
+
+
+def micro_features(audio: np.ndarray) -> np.ndarray:
+    """The 40 channel micro_speech spectrogram ESPHome computes on the device (30 ms windows, 10 ms steps)."""
+    from pymicro_features import MicroFrontend
+
+    frontend = MicroFrontend()
+    data = np.asarray(audio, dtype=np.int16).tobytes()
+    features, i = [], 0
+    while i + 320 < len(data):
+        result = frontend.process_samples(data[i:i + 320])
+        i += result.samples_read * 2
+        if result.features:
+            features.append(result.features)
+    scaled = np.round(np.asarray(features, dtype=np.float32) / MICRO_FEATURE_SCALE)
+    return np.clip(scaled, 0, 65535).astype(np.uint16)

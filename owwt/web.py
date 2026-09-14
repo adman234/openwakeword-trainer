@@ -2,6 +2,7 @@
 import json
 import os
 import random
+import re
 import shutil
 import threading
 import time
@@ -15,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import adversarial, assets, projects
+from . import adversarial, assets, micro, projects
 from .audio import decode, level_report, trim_silence, wav_bytes
 from .config import (ADVANCED_DEFAULTS, CUSTOM_BACKGROUND_DIR, DATA_DIR, HTTP_PORT, HTTPS_PORT, OUTPUT_DIR, PRESETS,
                      RECORDING_KINDS, SR, TFLITE_PYTHON, VERSION)
@@ -76,6 +77,7 @@ def system():
         "data_dir": str(DATA_DIR), "output_dir": str(OUTPUT_DIR), "custom_background_dir": str(CUSTOM_BACKGROUND_DIR),
         "disk_free_bytes": disk.free, "http_port": HTTP_PORT, "https_port": HTTPS_PORT, "presets": PRESETS,
         "advanced_defaults": ADVANCED_DEFAULTS, "tflite_available": TFLITE_PYTHON.exists(),
+        "micro_available": micro.available(),
     }
 
 
@@ -171,7 +173,8 @@ def create_project(body: CreateBody):
 def get_project(pid: str):
     project = projects.summary(projects.load(pid))
     project["recordings"] = projects.recordings(pid)
-    project["runs"] = [{k: r.get(k) for k in ("run_id", "created_at", "files", "recommended_threshold", "headline", "duration_seconds")}
+    project["runs"] = [{k: r.get(k) for k in ("run_id", "created_at", "files", "esphome_files", "model_types",
+                                              "recommended_threshold", "headline", "duration_seconds")}
                        for r in projects.runs(pid)]
     return project
 
@@ -282,6 +285,24 @@ def list_runs(pid: str):
 def get_run_file(pid: str, run_id: str, filename: str):
     return FileResponse(projects.run_file(pid, run_id, filename), filename=filename,
                         media_type="application/octet-stream")
+
+
+@app.get("/api/projects/{pid}/runs/{run_id}/esphome/{filename}")
+def get_run_esphome_file(pid: str, run_id: str, filename: str):
+    media = "application/json" if filename.endswith(".json") else "application/octet-stream"
+    return FileResponse(projects.run_esphome_file(pid, run_id, filename), filename=filename, media_type=media)
+
+
+@app.get("/esphome/{filename}")
+def esphome_model(filename: str):
+    """Published ESPHome models, so device YAML can use `model: http://<server>:8080/esphome/<name>.json`."""
+    if not projects.ESPHOME_FILE_RE.match(filename):
+        raise KeyError(filename)
+    path = OUTPUT_DIR / "esphome" / filename
+    if not path.exists():
+        raise KeyError(filename)
+    media = "application/json" if filename.endswith(".json") else "application/octet-stream"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/api/projects/{pid}/runs/{run_id}/publish")

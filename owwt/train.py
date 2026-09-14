@@ -19,16 +19,11 @@ import soundfile as sf
 
 from . import assets, projects
 from .audio import read_wav, to_int16, write_wav
-from .config import CUSTOM_BACKGROUND_DIR, SR, training_settings
+from .config import CUSTOM_BACKGROUND_DIR, MODEL_TYPES, SR, training_settings
 
-STAGES = [
-    "Check training data",
-    "Generate wake word voices",
-    "Generate similar-sounding phrases",
-    "Augment audio and extract features",
-    "Train the model",
-    "Evaluate and export",
-]
+COMMON_STAGES = ["Check training data", "Generate wake word voices", "Generate similar-sounding phrases"]
+OWW_STAGES = ["Augment audio and extract features", "Train the model", "Evaluate and export"]
+MICRO_STAGES = ["Build ESPHome spectrograms", "Train the ESPHome model", "Export for ESPHome"]
 GENERATION_VERSION = 1
 FEATURE_VERSION = 1
 
@@ -69,41 +64,122 @@ class Pipeline:
         s = self.settings
         self.n_pos, self.n_neg = int(s["n_positive"]), int(s["n_negative"])
         self.n_pos_val, self.n_neg_val = max(200, self.n_pos // 10), max(200, self.n_neg // 10)
+        self.types = [t for t in MODEL_TYPES if t in (self.project.get("model_types") or ["openwakeword"])] or ["openwakeword"]
+        self._shared = None
 
     # ------------------------------------------------------------------------------------------
     def run(self):
         from .device import pick_torch_device
 
-        self.r.set(project_id=self.pid, run_id=self.run_id)
+        stages = list(COMMON_STAGES)
+        if "openwakeword" in self.types:
+            stages += OWW_STAGES
+        if "microwakeword" in self.types:
+            stages += MICRO_STAGES
+        self.r.set(project_id=self.pid, run_id=self.run_id, stages=stages)
         self.device, self.device_note = pick_torch_device()
+        labels = {"openwakeword": "openWakeWord for Home Assistant", "microwakeword": "microWakeWord for ESPHome"}
         self.log(f"Wake word: \"{self.project['phrase']}\"  model file: {self.project['model_name']}")
+        self.log("Building: " + " and ".join(labels[t] for t in self.types))
         self.log(f"Compute device: {self.device_note}")
         self.log("Settings: " + ", ".join(f"{k}={v}" for k, v in self.settings.items() if k not in ("label", "description")))
 
-        self.r.stage(0)
+        stage = iter(range(len(stages)))
+        self.r.stage(next(stage))
         self.check_assets()
-        self.r.stage(1)
+        self.r.stage(next(stage))
         self.generate_positives()
-        self.r.stage(2)
+        self.r.stage(next(stage))
         self.generate_negatives()
         self.release_kokoro()
-        self.r.stage(3)
-        data, split = self.build_features()
-        self.r.stage(4)
-        from .model import train
 
-        model, results = train(data, self.settings, self.device, self.log, self.r.progress, self.r.should_stop)
-        self.r.stage(5)
-        self.export(model, results, data, split)
+        name = self.project.get("model_name") or self.pid
+        run_dir = self.dir / "runs" / self.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        report = {"run_id": self.run_id, "project_id": self.pid, "phrase": self.project["phrase"], "model_name": name,
+                  "model_types": self.types, "device": self.device_note, "settings": self.settings}
+
+        if "openwakeword" in self.types:
+            from .model import train
+
+            self.r.stage(next(stage))
+            data, split = self.build_features()
+            self.r.stage(next(stage))
+            model, results = train(data, self.settings, self.device, self.log, self.r.progress, self.r.should_stop)
+            self.r.stage(next(stage))
+            report.update(self.export(model, results, data, split, run_dir, name))
+
+        if "microwakeword" in self.types:
+            from .micro import MicroTrainer
+
+            micro = MicroTrainer(self)
+            self.r.stage(next(stage))
+            micro.build_features()
+            self.r.stage(next(stage))
+            result = micro.train()
+            self.r.stage(next(stage))
+            report["micro"] = micro.export(result, run_dir, name)
+            report.setdefault("recommended_threshold", report["micro"]["probability_cutoff"])
+            report.setdefault("headline", {"threshold": report["micro"]["probability_cutoff"], "recall_tts": report["micro"]["recall"],
+                                           "fp_per_hour": report["micro"]["faph"], "recall_real_clips": None,
+                                           "similar_phrase_accept": None})
+
+        self.finish(report, run_dir)
+
+    def finish(self, report: dict, run_dir: Path):
+        report.update(created_at=time.time(), duration_seconds=round(time.time() - self.started))
+        (run_dir / "report.json").write_text(json.dumps(report, indent=2))
+        micro = report.get("micro")
+        self.r.set(result={"run_id": self.run_id, "headline": report.get("headline"),
+                           "micro": {k: micro[k] for k in ("probability_cutoff", "recall", "faph")} if micro else None})
+        if self.project.get("publish_to_output", True):
+            try:
+                for path in projects.publish(self.pid, self.run_id):
+                    self.log(f"Copied to {path}")
+            except Exception as exc:
+                self.log(f"WARNING: could not copy models to the output folder: {exc}")
+        self.r.progress(1.0, "Done")
+
+    def shared_inputs(self) -> dict:
+        """Recordings, the held-out split and background audio banks, shared by both model types."""
+        if self._shared is None:
+            real_pos = projects.recording_files(self.pid, "positive")
+            real_neg = projects.recording_files(self.pid, "negative")
+            # Hold out about one in five of your own wake word recordings to measure how well the model hears you
+            held_out = set()
+            if len(real_pos) >= 5:
+                held_out = {p.name for p in real_pos if stable_hash(p.name) % 5 == 0} or {real_pos[-1].name}
+            self.log(f"Your recordings: {len(real_pos)} wake word ({len(held_out)} held out for testing), "
+                     f"{len(real_neg)} other speech")
+            custom_bank = self._custom_bank()
+            tts_banks = [(str(assets.BACKGROUND_BANK), 1.0)]
+            run_banks = tts_banks + ([(str(custom_bank), 0.5)] if custom_bank else [])
+            self._shared = {"real_pos": real_pos, "real_neg": real_neg, "held_out": held_out,
+                            "tts_banks": tts_banks, "run_banks": run_banks}
+        return self._shared
 
     # Stage 1 ----------------------------------------------------------------------------------
     def check_assets(self):
-        if assets.all_ready():
+        from . import micro
+
+        want_oww, want_micro = "openwakeword" in self.types, "microwakeword" in self.types
+        if want_micro and not micro.available():
+            raise RuntimeError("The microWakeWord trainer is not installed in this container, so ESPHome models can't be built")
+        pieces = []
+        if want_oww and not assets.all_ready():
+            pieces.append((assets.ensure_all, "openWakeWord training data (" + ", ".join(assets.missing()) + ")"))
+        elif want_micro and not (assets._ready("rirs") and assets._ready("background")):
+            pieces.append((assets.ensure_augmentation, "room acoustics and background sounds"))
+        if want_micro and not assets.micro_ready():
+            pieces.append((assets.ensure_microwakeword, "ESPHome negative data (5.7 GB)"))
+        if not pieces:
             self.log("All shared training data is present")
             self.r.progress(1.0, "Training data ready")
             return
-        self.log("Downloading shared training data. This happens once and is reused by every wake word: " + ", ".join(assets.missing()))
-        assets.ensure_all(lambda f, m: (self.r.check_stop(), self.r.progress(f, m)))
+        self.log("Downloading shared training data. This happens once and is reused by every wake word: "
+                 + "; ".join(label for _, label in pieces))
+        for i, (ensure, _) in enumerate(pieces):
+            ensure(lambda f, m, i=i: (self.r.check_stop(), self.r.progress((i + f) / len(pieces), m)))
 
     # Kokoro -----------------------------------------------------------------------------------
     def kokoro(self):
@@ -268,25 +344,15 @@ class Pipeline:
 
         pos_train, pos_val = self._clips("pos_train", self.n_pos), self._clips("pos_val", self.n_pos_val)
         neg_train, neg_val = self._clips("neg_train", self.n_neg), self._clips("neg_val", self.n_neg_val)
-        real_pos = projects.recording_files(self.pid, "positive")
-        real_neg = projects.recording_files(self.pid, "negative")
+        shared = self.shared_inputs()
+        real_pos, real_neg, held_out = shared["real_pos"], shared["real_neg"], shared["held_out"]
+        tts_banks, run_banks = shared["tts_banks"], shared["run_banks"]
 
         total_length = self._total_length(pos_train, real_pos)
         n_frames = frames_for_length(total_length)
         self.log(f"Clip window: {total_length / SR:.2f} s ({n_frames} feature frames)")
-
-        # Hold out about one in five of your own wake word recordings to measure how well the model hears you
-        held_out = set()
-        if len(real_pos) >= 5:
-            held_out = {p.name for p in real_pos if stable_hash(p.name) % 5 == 0} or {real_pos[-1].name}
         real_pos_train = [p for p in real_pos if p.name not in held_out]
         real_pos_val = [p for p in real_pos if p.name in held_out]
-        self.log(f"Your recordings: {len(real_pos)} wake word ({len(held_out)} held out for testing), "
-                 f"{len(real_neg)} other speech")
-
-        custom_bank = self._custom_bank()
-        tts_banks = [(str(assets.BACKGROUND_BANK), 1.0)]
-        run_banks = tts_banks + ([(str(custom_bank), 0.5)] if custom_bank else [])
 
         def tasks(paths, rounds=1, align="end", salt=""):
             out = []
@@ -371,13 +437,9 @@ class Pipeline:
         return data, split
 
     # Stage 6 ----------------------------------------------------------------------------------
-    def export(self, model, results, data, split):
+    def export(self, model, results, data, split, run_dir: Path, name: str) -> dict:
         from .export import export_onnx, export_tflite, save_weights
         from .model import clip_max_score
-
-        name = self.project.get("model_name") or self.pid
-        run_dir = self.dir / "runs" / self.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
 
         self.r.progress(0.1, "Exporting ONNX model")
         diff = export_onnx(model, run_dir / f"{name}.onnx")
@@ -422,37 +484,25 @@ class Pipeline:
             "similar_phrase_accept": row["similar_phrase_accept"],
             "fp_per_hour": row["fp_per_hour"],
         }
-        report = {
-            "run_id": self.run_id, "created_at": time.time(), "project_id": self.pid,
-            "phrase": self.project["phrase"], "model_name": name, "device": self.device_note,
-            "duration_seconds": round(time.time() - self.started), "n_frames": data.n_frames,
-            "window_seconds": split["total_length"] / SR, "settings": self.settings,
+        self.log(f"Recommended threshold {rec}: catches {row['recall_tts']:.0%} of test voices, "
+                 f"{row['fp_per_hour']:.2f} false activations per hour on the validation set")
+        if positives:
+            self.log(f"Your wake word recordings detected: {headline['recall_real_clips']:.0%}")
+        self.r.progress(1.0, "Home Assistant model exported")
+        return {
+            "n_frames": data.n_frames, "window_seconds": split["total_length"] / SR,
             "counts": {k: int(len(getattr(data, k))) for k in
                        ("pos_tts", "pos_real", "neg_tts", "neg_real", "neg_background", "val_pos_tts", "val_pos_real", "val_neg")},
             "recommended_threshold": rec, "headline": headline, "thresholds": results["thresholds"],
             "selected": results["selected"], "recordings": scored, "history": results["history"],
             "tflite": tflite_info,
         }
-        (run_dir / "report.json").write_text(json.dumps(report, indent=2))
-        self.r.set(result={"run_id": self.run_id, "headline": headline})
-
-        self.log(f"Recommended threshold {rec}: catches {row['recall_tts']:.0%} of test voices, "
-                 f"{row['fp_per_hour']:.2f} false activations per hour on the validation set")
-        if positives:
-            self.log(f"Your wake word recordings detected: {headline['recall_real_clips']:.0%}")
-        if self.project.get("publish_to_output", True):
-            try:
-                for path in projects.publish(self.pid, self.run_id):
-                    self.log(f"Copied to {path}")
-            except Exception as exc:
-                self.log(f"WARNING: could not copy models to the output folder: {exc}")
-        self.r.progress(1.0, "Done")
 
 
 def main():
     from .jobs import JobReporter
 
-    reporter = JobReporter(STAGES)
+    reporter = JobReporter(COMMON_STAGES)
     reporter.run(lambda: Pipeline(sys.argv[1], reporter).run())
 
 

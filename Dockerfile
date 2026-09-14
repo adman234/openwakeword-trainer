@@ -22,12 +22,22 @@ ENV PYTHONUNBUFFERED=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 openssl tini ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 openssl tini ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 
-# TensorFlow lives in its own venv and is only used to write .tflite files for Home Assistant
+# TensorFlow lives in its own venv. It writes the Home Assistant .tflite files and runs microWakeWord training
+# for ESPHome. microWakeWord is installed editable because a normal install skips its audio subpackage
+# (the folder has no __init__.py).
+ARG MICROWAKEWORD_COMMIT=4665173cd35f1cff9a61e06fc427f124766c488e
 RUN python -m venv /opt/tfenv \
- && /opt/tfenv/bin/pip install "tensorflow-cpu==2.19.0"
+ && /opt/tfenv/bin/pip install "tensorflow-cpu==2.19.0" \
+ && git clone https://github.com/kahrendt/microWakeWord.git /opt/microWakeWord \
+ && git -C /opt/microWakeWord checkout "${MICROWAKEWORD_COMMIT}" \
+ && /opt/tfenv/bin/pip install --no-deps -e /opt/microWakeWord \
+ && /opt/tfenv/bin/pip install "numpy==2.1.3" "audiomentations==0.43.1" "datasets==5.0.1" "mmap_ninja==0.9.0" \
+      "pymicro-features==2.0.2" "PyYAML==6.0.3" "absl-py==2.5.0" "webrtcvad-wheels==2.0.14" "ai-edge-litert==2.2.0" \
+      "audio-metadata @ git+https://github.com/whatsnowplaying/audio-metadata@d4ebb238e6a401bb1a5aaaac60c9e2b3cb30929f" \
+ && /opt/tfenv/bin/python -c "import microwakeword.model_train_eval, ai_edge_litert.interpreter"
 
 WORKDIR /app
 

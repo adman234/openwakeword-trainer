@@ -347,6 +347,19 @@ details[open] > summary { margin-bottom: 10px; }
 .tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .tag.positive { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
 
+.code {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  font-family: var(--mono); font-size: 13px; line-height: 1.5; overflow-x: auto; white-space: pre; margin: 8px 0;
+}
+.type-options { display: grid; gap: 10px; }
+.check-card {
+  display: flex; gap: 12px; align-items: flex-start; border: 1.5px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.check-card input { margin-top: 3px; flex: none; }
+.check-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.check-card:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
+
 /* Toasts */
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 50; max-width: min(420px, calc(100vw - 40px)); }
 .toast {

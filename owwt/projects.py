@@ -17,12 +17,13 @@ import uuid
 import soundfile as sf
 
 from .audio import write_wav
-from .config import OUTPUT_DIR, PRESETS, PROJECTS_DIR, RECORDING_KINDS, SR
+from .config import MODEL_TYPES, OUTPUT_DIR, PRESETS, PROJECTS_DIR, RECORDING_KINDS, SR
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,120}\.wav$")
 RUN_RE = re.compile(r"^\d{8}-\d{6}$")
 MODEL_FILE_RE = re.compile(r"^[a-z0-9_]{1,64}\.(onnx|tflite|json)$")
+ESPHOME_FILE_RE = re.compile(r"^[a-z0-9_]{1,64}\.(tflite|json)$")
 
 
 def slugify(text: str) -> str:
@@ -72,14 +73,14 @@ def create(phrase: str, preset: str = "standard") -> dict:
     project = {
         "id": pid, "name": phrase.title(), "phrase": phrase, "model_name": pid, "variants": [],
         "pronunciation": "", "custom_negatives": [], "preset": preset, "advanced": {},
-        "publish_to_output": True, "created_at": now, "updated_at": now,
+        "model_types": ["openwakeword"], "publish_to_output": True, "created_at": now, "updated_at": now,
     }
     _write_json(d / "project.json", project)
     return project
 
 
 EDITABLE = {"name": str, "phrase": str, "model_name": str, "variants": list, "pronunciation": str,
-            "custom_negatives": list, "preset": str, "advanced": dict, "publish_to_output": bool}
+            "custom_negatives": list, "preset": str, "advanced": dict, "publish_to_output": bool, "model_types": list}
 
 
 def update(pid: str, patch: dict) -> dict:
@@ -99,6 +100,10 @@ def update(pid: str, patch: dict) -> dict:
             value = [" ".join(str(v).split()) for v in value if str(v).strip()][:200]
         elif key == "model_name":
             value = slugify(value)
+        elif key == "model_types":
+            value = [t for t in MODEL_TYPES if t in value]
+            if not value:
+                raise ValueError("Pick at least one kind of model to build")
         elif key == "pronunciation":
             value = value.strip()[:400]
         project[key] = value
@@ -183,6 +188,8 @@ def runs(pid: str) -> list[dict]:
             if RUN_RE.match(rd.name) and report.exists():
                 data = json.loads(report.read_text())
                 data["files"] = sorted(f.name for f in rd.iterdir() if f.suffix in (".onnx", ".tflite"))
+                esphome = rd / "esphome"
+                data["esphome_files"] = sorted(f.name for f in esphome.iterdir()) if esphome.exists() else []
                 out.append(data)
     return out
 
@@ -205,7 +212,17 @@ def run_file(pid: str, run_id: str, filename: str):
     return p
 
 
+def run_esphome_file(pid: str, run_id: str, filename: str):
+    if not ESPHOME_FILE_RE.match(filename or ""):
+        raise KeyError(filename)
+    p = run_dir(pid, run_id) / "esphome" / filename
+    if not p.exists():
+        raise KeyError(filename)
+    return p
+
+
 def publish(pid: str, run_id: str) -> list[str]:
+    """Copy a run's models to the output folder. ESPHome files go to output/esphome, which is also served over HTTP."""
     d = run_dir(pid, run_id)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     copied = []
@@ -213,6 +230,11 @@ def publish(pid: str, run_id: str) -> list[str]:
         if f.suffix in (".onnx", ".tflite"):
             shutil.copy2(f, OUTPUT_DIR / f.name)
             copied.append(str(OUTPUT_DIR / f.name))
+    if (d / "esphome").exists():
+        (OUTPUT_DIR / "esphome").mkdir(parents=True, exist_ok=True)
+        for f in sorted((d / "esphome").iterdir()):
+            shutil.copy2(f, OUTPUT_DIR / "esphome" / f.name)
+            copied.append(str(OUTPUT_DIR / "esphome" / f.name))
     return copied
 
 

@@ -387,7 +387,7 @@ function projectCard(p) {
     <div class="muted small"><code>${esc(p.model_name)}</code> · ${esc(system?.presets?.[p.preset]?.label || p.preset)}</div>
     <div class="card-stats">
       <span>${icons.mic} ${counts.positive || 0} recordings</span>
-      ${hl ? `<span>${pct(hl.recall_tts)} detected · ${hl.fp_per_hour.toFixed(2)} false/h</span>` : ""}
+      ${hl && hl.recall_tts != null ? `<span>${pct(hl.recall_tts)} detected${hl.fp_per_hour != null ? ` · ${hl.fp_per_hour.toFixed(2)} false/h` : ""}</span>` : ""}
     </div>
     <div data-status="${p.id}">${projectStatus(p)}</div>
   </a>`;
@@ -785,13 +785,17 @@ const ADVANCED_FIELDS = [
   ["target_fp_per_hour", "Target false activations per hour", "Used to pick the best checkpoint and threshold"],
   ["max_negative_weight", "Negative weight", "Higher means fewer false activations but more misses"],
   ["real_weight", "Share of your recordings", "Fraction of each batch of wake word examples taken from your recordings (0 to 0.9)"],
+  ["micro_steps", "ESPHome training steps", "microWakeWord steps. More can be better but it trains on the CPU"],
+  ["micro_target_faph", "ESPHome false accepts per hour target", "Used to choose the probability cutoff written into the JSON"],
 ];
 
 async function tabTrain(project, el) {
   await refreshSystem();
   const s = system, c = project.recording_counts;
   const adv = { ...project.advanced };
-  const totalAssets = s.assets.reduce((n, a) => n + a.size_bytes, 0);
+  const totalAssets = s.assets.filter((a) => !a.optional).reduce((n, a) => n + a.size_bytes, 0);
+  const types = project.model_types?.length ? project.model_types : ["openwakeword"];
+  const microAsset = s.assets.find((a) => a.id === "microwakeword");
   const check = (ok, text, extra = "") => `<li class="${ok ? "ok" : ""}"><span class="ci">${ok ? icons.check : "!"}</span><span>${text}${extra ? ` <span class="muted small">${extra}</span>` : ""}</span></li>`;
 
   el.innerHTML = `
@@ -803,7 +807,19 @@ async function tabTrain(project, el) {
         ${check(c.positive >= 20, `${c.positive} wake word recordings`, c.positive >= 20 ? "" : `Optional. <a href="#/p/${project.id}/record">Record ${20 - c.positive} more</a> so the model learns your voice.`)}
         ${check(c.negative + c.background >= 5, `${c.negative} other speech and ${c.background} background recordings`, c.negative + c.background >= 5 ? "" : "Optional")}
         ${s.tflite_available ? "" : check(false, "TFLite converter missing, only .onnx will be produced")}
+        ${types.includes("microwakeword") ? check(microAsset?.ready, microAsset?.ready ? "ESPHome negative data downloaded" : `ESPHome negative data downloads first (${fmtBytes(microAsset?.size_bytes)}, one time only)`) : ""}
       </ul>
+    </div>
+    <div class="panel">
+      <h2>What to build</h2>
+      <div class="type-options">
+        <label class="check-card"><input type="checkbox" id="type-oww" ${types.includes("openwakeword") ? "checked" : ""}>
+          <div><b>Home Assistant (openWakeWord)</b>
+          <div class="muted small">A .tflite for Home Assistant's openWakeWord add-on. Your voice satellite streams audio to Home Assistant, which listens for the wake word. Includes live testing in the browser.</div></div></label>
+        <label class="check-card"><input type="checkbox" id="type-micro" ${types.includes("microwakeword") ? "checked" : ""} ${s.micro_available ? "" : "disabled"}>
+          <div><b>ESPHome on-device (microWakeWord)</b>
+          <div class="muted small">A .tflite and .json for ESPHome's micro_wake_word, so an ESP32-S3 device like the Voice PE hears the wake word itself. Adds a one-time ${fmtBytes(microAsset?.size_bytes)} download, and training runs on the CPU (roughly 30 to 90 minutes).${s.micro_available ? "" : " Not available: the microWakeWord trainer isn't installed."}</div></div></label>
+      </div>
     </div>
     <div class="panel">
       <h2>Quality</h2>
@@ -841,7 +857,9 @@ async function tabTrain(project, el) {
       if (v !== "") advanced[input.dataset.key] = input.tagName === "SELECT" ? v : Number(v);
     });
     if (advanced.voices === "all") delete advanced.voices;
-    return { preset: selectedPreset(el), advanced, publish_to_output: $("#publish", el).checked };
+    const model_types = [["openwakeword", "#type-oww"], ["microwakeword", "#type-micro"]]
+      .filter(([, sel]) => $(sel, el).checked).map(([t]) => t);
+    return { preset: selectedPreset(el), advanced, publish_to_output: $("#publish", el).checked, model_types };
   };
   let saveTimer;
   const save = async () => {
@@ -853,6 +871,16 @@ async function tabTrain(project, el) {
   bindPresetCards(el, () => { fillPlaceholders(); saveSoon(); });
   $$(".adv-grid [data-key]", el).forEach((input) => (input.onchange = saveSoon));
   $("#publish", el).onchange = saveSoon;
+  ["#type-oww", "#type-micro"].forEach((sel, i, all) => {
+    $(sel, el).onchange = async () => {
+      const other = $(all[1 - i], el);
+      if (!$(sel, el).checked && !other.checked) {
+        $(sel, el).checked = true;
+        return toast("Pick at least one kind of model to build", "warn");
+      }
+      try { await save(); route(); } catch (e) { toast(e.message, "error"); }
+    };
+  });
   $("#adv-reset", el).onclick = () => { $$(".adv-grid [data-key]", el).forEach((i) => (i.value = i.tagName === "SELECT" ? "all" : "")); saveSoon(); };
   fillPlaceholders();
 
@@ -885,14 +913,16 @@ async function tabTrain(project, el) {
   }
 
   function resultBox(j) {
-    const hl = j.result?.headline;
-    if (!hl) return "";
+    const hl = j.result?.headline, m = j.result?.micro;
+    if (!hl && !m) return "";
+    const oww = hl && (!m || hl.threshold !== m.probability_cutoff || hl.recall_real_clips != null);
     return `<div class="tiles">
-        ${tile(pct(hl.recall_tts), "Test voices detected")}
-        ${tile(hl.recall_real_clips == null ? "n/a" : pct(hl.recall_real_clips), "Your recordings detected")}
-        ${tile(hl.fp_per_hour.toFixed(2), "False activations per hour")}
+        ${oww ? tile(pct(hl.recall_tts), "Home Assistant model: test voices detected") : ""}
+        ${oww ? tile(hl.fp_per_hour == null ? "n/a" : hl.fp_per_hour.toFixed(2), "Home Assistant model: false activations per hour") : ""}
+        ${m ? tile(m.recall == null ? "n/a" : pct(m.recall), "ESPHome model: test voices detected") : ""}
+        ${m ? tile(m.faph == null ? "n/a" : m.faph.toFixed(2), "ESPHome model: false accepts per hour") : ""}
       </div>
-      <div class="row gap wrap"><a class="btn primary" href="#/p/${project.id}/test">${icons.mic} Test it live</a><a class="btn" href="#/p/${project.id}/download">${icons.download} Download</a></div>`;
+      <div class="row gap wrap">${oww ? `<a class="btn primary" href="#/p/${project.id}/test">${icons.mic} Test it live</a>` : ""}<a class="btn ${oww ? "" : "primary"}" href="#/p/${project.id}/download">${icons.download} Download</a></div>`;
   }
 
   function renderJob(j) {
@@ -954,9 +984,12 @@ function emptyPanel(title, text, href, label) {
 
 // Live test ----------------------------------------------------------------------------------
 async function tabTest(project, el) {
-  const runs = await api(`/api/projects/${project.id}/runs`);
+  const allRuns = await api(`/api/projects/${project.id}/runs`);
+  const runs = allRuns.filter((r) => r.files.some((f) => f.endsWith(".onnx")));
   if (!runs.length) {
-    el.innerHTML = emptyPanel("No model yet", "Train the wake word first, then come back here to try it with your microphone.", `#/p/${project.id}/train`, "Go to training");
+    el.innerHTML = allRuns.length
+      ? emptyPanel("Live testing needs the Home Assistant model", "Your models so far were built for ESPHome only, which runs on the device itself. Tick Home Assistant (openWakeWord) on the Train tab to also build a model you can test here.", `#/p/${project.id}/train`, "Go to training")
+      : emptyPanel("No model yet", "Train the wake word first, then come back here to try it with your microphone.", `#/p/${project.id}/train`, "Go to training");
     return;
   }
   el.innerHTML = `
@@ -1124,7 +1157,38 @@ async function tabTest(project, el) {
 async function tabDownload(project, el) {
   const runs = await api(`/api/projects/${project.id}/runs`);
   const fileUrl = (r, f) => `/api/projects/${project.id}/runs/${r.run_id}/files/${encodeURIComponent(f)}`;
+  const espUrl = (r, f) => `/api/projects/${project.id}/runs/${r.run_id}/esphome/${encodeURIComponent(f)}`;
+  const espLinks = (r, primary) => (r.esphome_files || []).map((f) =>
+    `<a class="btn ${primary && f.endsWith(".json") ? "primary" : "ghost"}" href="${espUrl(r, f)}" download>${icons.download} ${esc(f)}${primary && f.endsWith(".json") ? ` <span class="sub">for ESPHome</span>` : ""}</a>`).join("");
+  const espPanel = (r) => {
+    const m = r.micro, json = r.esphome_files.find((f) => f.endsWith(".json"));
+    const url = `http://${location.hostname}:${system.http_port}/esphome/${json}`;
+    return `<div class="panel">
+      <div class="row between wrap"><h2>ESPHome model (microWakeWord)</h2><span class="muted small">${m.steps.toLocaleString()} steps, ${fmtDuration(m.duration_seconds)} of CPU training</span></div>
+      <div class="tiles">
+        ${tile(m.recall == null ? "n/a" : pct(m.recall), "Test voices detected", "At the probability cutoff, on held-out Kokoro voices")}
+        ${tile(m.faph == null ? "n/a" : m.faph.toFixed(2), "False accepts per hour", "Streaming test on dinner party recordings")}
+        ${tile(m.probability_cutoff.toFixed(2), "Probability cutoff", m.target_met ? "Written into the JSON manifest" : "Target not met, so this is the fewest false accepts")}
+      </div>
+      <div class="row gap wrap">${espLinks(r, true)}</div>
+      <h3 class="mt">Add it to your ESPHome device</h3>
+      <p class="muted small">This container serves the published files, so the device YAML can point straight at it. ESPHome downloads the model when it compiles. The device needs micro_wake_word support, such as an ESP32-S3 with PSRAM like the Voice PE.</p>
+      <pre class="code">micro_wake_word:
+  models:
+    - model: ${esc(url)}</pre>
+      <p class="muted small">If ESPHome can't reach this server, copy both files into one folder on the machine running ESPHome and set <code>model:</code> to the full path of the .json file. To make it more or less sensitive, add <code>probability_cutoff: 95%</code> under the model. If the device logs that it can't allocate tensors, raise <code>tensor_arena_size</code> in the .json.</p>
+      <details class="mt"><summary>Manifest</summary><pre class="code">${esc(JSON.stringify(m.manifest, null, 2))}</pre></details>
+      <details><summary>Cutoff table</summary>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Cutoff</th><th>Test voices detected</th><th>False accepts / hour</th></tr></thead>
+          <tbody>${m.roc.filter((row) => row.cutoff >= 0.5).map((row) => `<tr class="${row.cutoff.toFixed(2) === m.probability_cutoff.toFixed(2) ? "hl" : ""}">
+            <td>${row.cutoff.toFixed(2)}</td><td>${pct(1 - row.frr, 1)}</td><td>${row.faph.toFixed(2)}</td></tr>`).join("")}</tbody>
+        </table></div>
+      </details>
+    </div>`;
+  };
   const downloads = (r, primary) => {
+    if (!r.files.length) return "";
     const tflite = r.files.find((f) => f.endsWith(".tflite")), onnx = r.files.find((f) => f.endsWith(".onnx"));
     return `${tflite ? `<a class="btn ${primary ? "primary" : ""}" href="${fileUrl(r, tflite)}" download>${icons.download} ${esc(tflite)}${primary ? ` <span class="sub">for Home Assistant</span>` : ""}</a>` : `<span class="warn-text small">No .tflite${r.tflite?.error ? `: ${esc(r.tflite.error)}` : ""}</span>`}
       ${onnx ? `<a class="btn ${primary ? "" : "ghost"}" href="${fileUrl(r, onnx)}" download>${icons.download} ${esc(onnx)}</a>` : ""}`;
@@ -1135,9 +1199,9 @@ async function tabDownload(project, el) {
     html = emptyPanel("No model yet", "Once training finishes, the .tflite and .onnx files appear here.", `#/p/${project.id}/train`, "Go to training");
   } else {
     const r = runs[0], hl = r.headline || {};
-    html = `
+    html = (r.files.length ? `
       <div class="panel">
-        <div class="row between wrap"><h2>Latest model</h2><span class="muted small">Trained ${fmtAgo(r.created_at)} in ${fmtDuration(r.duration_seconds)} on ${esc(r.device)}</span></div>
+        <div class="row between wrap"><h2>Home Assistant model (openWakeWord)</h2><span class="muted small">Trained ${fmtAgo(r.created_at)} in ${fmtDuration(r.duration_seconds)} on ${esc(r.device)}</span></div>
         <div class="tiles">
           ${tile(pct(hl.recall_tts), "Test voices detected", "Held-out Kokoro voices with noise and reverb")}
           ${tile(hl.recall_real_clips == null ? "n/a" : pct(hl.recall_real_clips), "Your recordings detected", hl.recall_real_clips == null ? "Record your voice to measure this" : "Includes clips used for training")}
@@ -1162,12 +1226,12 @@ async function tabDownload(project, el) {
           <li>Restart the <b>openWakeWord</b> add-on.</li>
           <li>Go to <b>Settings › Voice assistants</b>, open your assistant and pick <b>${esc(r.model_name)}</b> as the wake word.</li>
         </ol>
-        <p class="muted small">Running wyoming-openwakeword yourself? Put the file in the folder you pass to <code>--custom-model-dir</code>. In Python: <code>openwakeword.Model(wakeword_models=["${esc(r.model_name)}.onnx"], inference_framework="onnx")</code>. ESPHome devices that detect wake words on the device itself use microWakeWord, which needs a different kind of model.</p>
-      </div>
+        <p class="muted small">Running wyoming-openwakeword yourself? Put the file in the folder you pass to <code>--custom-model-dir</code>. In Python: <code>openwakeword.Model(wakeword_models=["${esc(r.model_name)}.onnx"], inference_framework="onnx")</code>. ESPHome devices that detect wake words on the device itself need the ESPHome model instead: tick it on the Train tab.</p>
+      </div>` : "") + (r.micro ? espPanel(r) : "") + `
       ${runs.length > 1 ? `<div class="panel"><h2>Earlier models</h2>${runs.slice(1).map((x) => `
         <div class="row between wrap gap" style="padding:8px 0;border-top:1px solid var(--border)">
           <div class="small">${new Date(x.created_at * 1000).toLocaleString()}<div class="muted xsmall">${x.headline ? `${pct(x.headline.recall_tts)} detected · ${x.headline.fp_per_hour.toFixed(2)} false/h · threshold ${x.recommended_threshold}` : ""}</div></div>
-          <div class="row gap wrap">${downloads(x, false)}</div>
+          <div class="row gap wrap">${downloads(x, false)}${espLinks(x, false)}</div>
         </div>`).join("")}</div>` : ""}`;
   }
   el.innerHTML = `${html}
