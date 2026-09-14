@@ -818,7 +818,7 @@ async function tabTrain(project, el) {
           <div class="muted small">A .tflite for Home Assistant's openWakeWord add-on. Your voice satellite streams audio to Home Assistant, which listens for the wake word. Includes live testing in the browser.</div></div></label>
         <label class="check-card"><input type="checkbox" id="type-micro" ${types.includes("microwakeword") ? "checked" : ""} ${s.micro_available ? "" : "disabled"}>
           <div><b>ESPHome on-device (microWakeWord)</b>
-          <div class="muted small">A .tflite and .json for ESPHome's micro_wake_word, so an ESP32-S3 device like the Voice PE hears the wake word itself. Adds a one-time ${fmtBytes(microAsset?.size_bytes)} download, and training runs on the CPU (roughly 30 to 90 minutes).${s.micro_available ? "" : " Not available: the microWakeWord trainer isn't installed."}</div></div></label>
+          <div class="muted small">A .tflite and .json for ESPHome's micro_wake_word, so an ESP32-S3 device like the Voice PE hears the wake word itself. Adds a one-time ${fmtBytes(microAsset?.size_bytes)} download (about 26 GB once unpacked), and training runs on the CPU (roughly 30 to 90 minutes).${s.micro_available ? "" : " Not available: the microWakeWord trainer isn't installed."}</div></div></label>
       </div>
     </div>
     <div class="panel">

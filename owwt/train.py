@@ -171,7 +171,7 @@ class Pipeline:
         elif want_micro and not (assets._ready("rirs") and assets._ready("background")):
             pieces.append((assets.ensure_augmentation, "room acoustics and background sounds"))
         if want_micro and not assets.micro_ready():
-            pieces.append((assets.ensure_microwakeword, "ESPHome negative data (5.7 GB)"))
+            pieces.append((assets.ensure_microwakeword, "ESPHome negative data (5.7 GB download, about 26 GB unpacked)"))
         if not pieces:
             self.log("All shared training data is present")
             self.r.progress(1.0, "Training data ready")

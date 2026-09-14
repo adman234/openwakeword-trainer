@@ -35,7 +35,7 @@ ASSETS = [
     {"id": "acav", "label": "Negative speech (2,000 hours)", "size_bytes": 17_280_000_128,
      "description": "Pre-computed features from 2,000 hours of ACAV100M audio. This is what teaches the model what is NOT the wake word."},
     {"id": "microwakeword", "label": "ESPHome negative data", "size_bytes": 5_709_958_106, "optional": True,
-     "description": "Speech, noise and dinner party spectrograms from microWakeWord. Only needed for ESPHome models, and downloaded automatically the first time you train one."},
+     "description": "Speech, noise and dinner party spectrograms from microWakeWord. Only needed for ESPHome models, and downloaded automatically the first time you train one. Unpacks to about 26 GB on disk."},
 ]
 
 MICRO_URL = f"{HF}/datasets/kahrendt/microwakeword/resolve/main/"

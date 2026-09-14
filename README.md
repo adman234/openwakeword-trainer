@@ -76,7 +76,7 @@ Finished models are also copied to `/output` automatically.
 ESPHome devices that detect the wake word themselves (ESP32-S3 devices such as the Home Assistant Voice PE) can't use the openWakeWord `.tflite`. They need a microWakeWord model plus a JSON manifest.
 
 1. On the **Train** tab, under *What to build*, tick **ESPHome on-device (microWakeWord)**. You can build it alongside the Home Assistant model or on its own. Both reuse the same Kokoro clips and recordings.
-2. Train. The first ESPHome run downloads 5.7 GB of microWakeWord's negative spectrograms. microWakeWord training runs on the CPU and takes roughly 30 to 90 minutes depending on the preset.
+2. Train. The first ESPHome run downloads 5.7 GB of microWakeWord's negative spectrograms, which unpack to about 26 GB on disk. microWakeWord training runs on the CPU and takes roughly 30 to 90 minutes depending on the preset.
 3. The **Download** tab shows the `.json` and `.tflite`, the recommended `probability_cutoff` (chosen from a streaming false accept test on dinner party recordings), and a YAML snippet. The container serves the published files, so your device config can simply use:
    ```yaml
    micro_wake_word:
@@ -129,7 +129,7 @@ Everything is adjustable under *Advanced settings*: clip counts, steps, model si
 │   ├── recordings/{positive,negative,background}/   your clips
 │   ├── work/                                         generated clips and cached features (safe to delete)
 │   └── runs/<timestamp>/                             .tflite, .onnx and report.json
-├── downloads/        shared training data (about 19 GB, plus 5.7 GB once you build an ESPHome model)
+├── downloads/        shared training data (about 19 GB, plus about 26 GB once you build an ESPHome model)
 ├── background/       drop your own background audio here to use it for every wake word
 └── certs/            self-signed HTTPS certificate (delete to regenerate)
 ```
