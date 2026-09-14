@@ -119,10 +119,12 @@ Everything is adjustable under *Advanced settings*: clip counts, steps, model si
 
 ## GPUs
 
-The image uses PyTorch 2.8 with CUDA 12.6, which supports NVIDIA cards from Pascal (GTX 10xx, Quadro P series) through Ada (RTX 40xx). If the GPU can't be used, the container says so on the Setup page and falls back to the CPU. For RTX 50xx (Blackwell) cards, build the image with CUDA 12.8:
+The image uses PyTorch 2.8 with CUDA 12.8, which supports NVIDIA cards from Turing (RTX 20xx, GTX 16xx) through Blackwell (RTX 50xx). If the GPU can't be used, the training log says so and everything falls back to the CPU. Your Unraid NVIDIA driver needs to be version 570 or newer for CUDA 12.8.
+
+For older Pascal cards (GTX 10xx, Quadro P series), build the image with CUDA 12.6:
 
 ```bash
-docker build --build-arg TORCH_CUDA=cu128 -t openwakeword-trainer:cu128 .
+docker build --build-arg TORCH_CUDA=cu126 -t openwakeword-trainer:cu126 .
 ```
 
 ## Troubleshooting

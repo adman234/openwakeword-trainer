@@ -1,10 +1,10 @@
 # openWakeWord Trainer: Kokoro TTS, openWakeWord training and a web UI in one image.
 FROM python:3.11-slim-bookworm
 
-# cu126 wheels support NVIDIA GPUs from Pascal (GTX 10xx, Quadro P) up to Ada (RTX 40xx).
-# For RTX 50xx (Blackwell) build with: --build-arg TORCH_VERSION=2.8.0 --build-arg TORCH_CUDA=cu128
+# cu128 wheels support NVIDIA GPUs from Turing (RTX 20xx, GTX 16xx) up to Blackwell (RTX 50xx).
+# For Pascal cards (GTX 10xx, Quadro P series) build with: --build-arg TORCH_CUDA=cu126
 ARG TORCH_VERSION=2.8.0
-ARG TORCH_CUDA=cu126
+ARG TORCH_CUDA=cu128
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -44,11 +44,15 @@ class FeatureExtractor:
 
         try:
             self.af = build(device)
+            self.gpu = "CUDA" in self.af.onnx_execution_provider
+            if self.gpu:
+                # A new GPU generation can load the CUDA provider but still fail at run time, so test it now
+                self.embed(np.zeros((2, 32000), dtype=np.int16))
         except Exception:
             if device == "cpu":
                 raise
             self.af = build("cpu")
-        self.gpu = "CUDA" in self.af.onnx_execution_provider
+            self.gpu = False
 
     def embed(self, clips: np.ndarray) -> np.ndarray:
         """(N, samples) int16 clips of equal length to (N, frames, 96) features."""
