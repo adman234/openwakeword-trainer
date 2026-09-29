@@ -22,7 +22,7 @@ import numpy as np
 from . import assets, projects
 from .config import SR, TFLITE_PYTHON
 
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2
 AUGMENT_SAMPLES = int(3.2 * SR)
 CLIP_DURATION_MS = 1500
 # The mixednet below needs 204 frames per example: 50 output frames (1.5 s at stride 3) plus 154 frames
@@ -150,8 +150,16 @@ class MicroTrainer:
         def rounds_for(paths, target):
             return 0 if not paths else max(4, min(300, math.ceil(target / len(paths))))
 
+        # The background banks are part of the cache key. Without that, recording your living room and
+        # training again would silently reuse spectrograms that never heard it.
+        banks = shared["run_banks"]
+        bank_signature = [[Path(path).name, Path(path).stat().st_size if Path(path).exists() else 0]
+                          for path, _ in banks]
+        # Background-only negatives lean on your own recordings: the shared AudioSet library is already
+        # covered many times over by microWakeWord's 2,000 hours, your living room is not.
+        bg_banks = banks if len(banks) == 1 else [(banks[0][0], 0.5)] + [(path, 1.5) for path, _ in banks[1:]]
         tts_fp = fingerprint({"v": FEATURE_VERSION, "pos": p.pos_fp, "neg": p.neg_fp, "slides": slides,
-                              "n": [p.n_pos, p.n_neg, p.n_pos_val, p.n_neg_val]})
+                              "n": [p.n_pos, p.n_neg, p.n_pos_val, p.n_neg_val], "banks": bank_signature})
         tts_sets = [
             ("tts_positive/training/tts_mmap", tasks(pos_train, salt="mpt", keep=TRAIN_KEEP_FRAMES), slides, "wake word clips"),
             ("tts_positive/validation/tts_mmap", tasks(pos_val[:half], salt="mpv", keep=TRAIN_KEEP_FRAMES), 1, "wake word validation clips"),
@@ -174,12 +182,20 @@ class MicroTrainer:
             ("real_negative/training/recordings_mmap",
              tasks(shared["real_neg"], rounds_for(shared["real_neg"], max(500, len(shared["real_neg"]) * 50)), align="mixed",
                    salt=f"mrn{p.run_id}"), 1, "your other speech recordings"),
+            # Background on its own, with no speech in it at all: the TV, music and room noise that should
+            # never wake the device. The openWakeWord path has always had this; microWakeWord needs it too.
+            ("background_negative/training/noise_mmap",
+             [(None, AUGMENT_SAMPLES, "random", stable_hash(f"mbg{p.run_id}-{i}"), {"micro_frames": None})
+              for i in range(max(1000, p.n_neg // 5))], 1, "background and room noise"),
         ]
-        for folder in ("real_positive", "real_negative"):
+        for folder in ("real_positive", "real_negative", "background_negative"):
             shutil.rmtree(self.features / folder, ignore_errors=True)
 
-        jobs = ([] if cached else [(f, t, s, label, shared["tts_banks"]) for f, t, s, label in tts_sets])
-        jobs += [(f, t, s, label, shared["run_banks"]) for f, t, s, label in run_sets if t]
+        # One set of banks for everything, so your own background audio also ends up mixed under the
+        # generated wake word clips instead of only under your recordings.
+        jobs = ([] if cached else [(f, t, s, label, banks) for f, t, s, label in tts_sets])
+        jobs += [(f, t, s, label, bg_banks if f.startswith("background_negative") else banks)
+                 for f, t, s, label in run_sets if t]
         if cached:
             self.log("Reusing cached ESPHome spectrograms for the generated clips")
         else:
@@ -191,7 +207,7 @@ class MicroTrainer:
         try:
             for folder, task_list, n_slides, label, banks in jobs:
                 self.r.check_stop()
-                key = tuple(b[0] for b in banks)
+                key = tuple(banks)  # weights differ per set, so they belong in the pool key
                 if key not in pools:
                     pools[key] = make_pool(assets.rir_paths(), banks, workers)
 
@@ -231,6 +247,10 @@ class MicroTrainer:
         features.append(mmap(self.features / "tts_negative", 4.0, False, "random"))
         if (self.features / "real_negative" / "training").exists():
             features.append(mmap(self.features / "real_negative", 1.0, False, "random"))
+        if (self.features / "background_negative" / "training").exists():
+            # Deliberately well below microWakeWord's own negative sets. This is a few minutes of audio, and
+            # a high weight would just teach the model those exact clips.
+            features.append(mmap(self.features / "background_negative", 4.0, False, "random"))
         features += [
             mmap(assets.MICRO_DIR / "speech", 10.0, False, "random"),
             mmap(assets.MICRO_DIR / "dinner_party", 10.0, False, "random"),
