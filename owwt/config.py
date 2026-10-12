@@ -80,11 +80,11 @@ ADVANCED_LIMITS = {
     "steps": (1000, 200000),
     "layer_size": (16, 256),
     "max_negative_weight": (1, 10000),
-    "target_fp_per_hour": (0.01, 10),
+    "target_fp_per_hour": (0.01, 10.0),   # floats: the clamp casts to the bound's type, and int(0.5) is 0
     "real_weight": (0, 0.9),
     "n_blocks": (1, 4),
     "micro_steps": (1000, 200000),
-    "micro_target_faph": (0.01, 10),
+    "micro_target_faph": (0.01, 10.0),
 }
 
 
