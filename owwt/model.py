@@ -200,31 +200,49 @@ class Validator:
         }
 
     def evaluate(self, model, target_fp: float) -> dict:
-        """Metrics at 0.5, plus recall at the lowest threshold that meets the false activation target.
-        The threshold is adjustable, so recall at the target is what checkpoints are compared on."""
+        """Metrics at 0.5, plus the operating point checkpoints are compared on: recall at the lowest threshold
+        that meets the false activation target or, when none does, the fewest false activations at any
+        threshold that still keeps recall at MIN_RECALL."""
         scores = self.raw_scores(model)
         m = self.metrics(scores, 0.5)
-        rows = [self.metrics(scores, t) for t in THRESHOLDS]
-        at = next((r for r in rows if r["threshold"] >= 0.3 and r["fp_per_hour"] <= target_fp), None)
-        if at is None:
-            at = min(rows, key=lambda r: (r["fp_per_hour"], -r["recall"]))
-        m.update(target_threshold=at["threshold"], target_recall=at["recall"],
-                 target_fp_per_hour=at["fp_per_hour"], target_met=at["fp_per_hour"] <= target_fp)
+        at = operating_point([self.metrics(scores, t) for t in THRESHOLDS], target_fp)
+        m.update(target_threshold=at["threshold"], target_recall=at["recall"], target_fp_per_hour=at["fp_per_hour"],
+                 target_met=at["fp_per_hour"] <= target_fp, recall_floor_met=at["recall"] >= MIN_RECALL)
         return m
 
     def threshold_table(self, model, target_fp: float) -> tuple[list[dict], float]:
         scores = self.raw_scores(model)
         rows = [self.metrics(scores, t) for t in THRESHOLDS]
-        ok = [r for r in rows if r["fp_per_hour"] <= target_fp and r["threshold"] >= 0.3]
-        recommended = ok[0]["threshold"] if ok else min(rows, key=lambda r: (r["fp_per_hour"], -r["threshold"]))["threshold"]
-        return rows, recommended
+        return rows, operating_point(rows, target_fp)["threshold"]
 
 
 THRESHOLDS = [round(float(t), 2) for t in np.arange(0.1, 0.951, 0.05)] + [0.97, 0.99]
+# When no threshold reaches the false activation target, a model must still catch at least this share of the
+# test voices to be useful. Below it, fewer false activations would only come from a model that rarely fires.
+MIN_RECALL = 0.65
+
+
+def operating_point(rows: list[dict], target_fp: float) -> dict:
+    """The threshold row to use: the lowest one meeting the target, else the fewest false activations with
+    recall >= MIN_RECALL, else the highest recall."""
+    ok = [r for r in rows if r["threshold"] >= 0.3 and r["fp_per_hour"] <= target_fp]
+    if ok:
+        return ok[0]
+    usable = [r for r in rows if r["recall"] >= MIN_RECALL]
+    if usable:
+        return min(usable, key=lambda r: (r["fp_per_hour"], -r["recall"]))
+    return max(rows, key=lambda r: (r["recall"], -r["fp_per_hour"]))
 
 
 def _selection_key(m: dict, target_fp: float) -> tuple:
-    return (m["target_met"], m["target_recall"], -m["target_fp_per_hour"])
+    """Rank checkpoints: meeting the target beats not meeting it, and is then compared on recall. Missing it,
+    a checkpoint that keeps recall >= MIN_RECALL is compared on false activations, since recall bought with
+    more false triggers is the wrong trade here. Older reports without recall_floor_met count as not met."""
+    if m["target_met"]:
+        return (2, m["target_recall"], -m["target_fp_per_hour"])
+    if m.get("recall_floor_met"):
+        return (1, -m["target_fp_per_hour"], m["target_recall"])
+    return (0, m["target_recall"], -m["target_fp_per_hour"])
 
 
 def train(data: TrainingData, settings: dict, device, log, progress, should_stop=lambda: False):
@@ -331,6 +349,9 @@ def train(data: TrainingData, settings: dict, device, log, progress, should_stop
         chosen, how = best_m, f"best single checkpoint (step {best_m['step']})"
     log(f"Selected {how}: at threshold {chosen['target_threshold']} recall {chosen['target_recall']:.1%} "
         f"with {chosen['target_fp_per_hour']:.2f} false activations/hour")
+    if not chosen["target_met"]:
+        log(f"No checkpoint reached {target_fp}/h, so this is the fewest false activations that still catches at least "
+            f"{MIN_RECALL:.0%} of the test voices. More false-trigger recordings or a more distinctive phrase help most.")
 
     table, recommended = validator.threshold_table(model, target_fp)
     return model.eval(), {"selected": how, "metrics_at_0_5": chosen, "thresholds": table,
