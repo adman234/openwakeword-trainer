@@ -26,6 +26,7 @@ OWW_STAGES = ["Augment audio and extract features", "Train the model", "Evaluate
 MICRO_STAGES = ["Build ESPHome spectrograms", "Train the ESPHome model", "Export for ESPHome"]
 GENERATION_VERSION = 1
 FEATURE_VERSION = 1
+ARCHIVE_KEEP = 2   # parked clip sets kept per folder when a setting changes (about 1.3 GB each)
 
 
 def fingerprint(obj) -> str:
@@ -198,11 +199,42 @@ class Pipeline:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+    def _activate(self, folder: Path, fp: str) -> bool:
+        """Make `folder` hold the clips for fingerprint `fp`; True if an earlier set was brought back.
+
+        Clips made under other settings (the Voices setting, say) are parked in work/tts-archive, not
+        deleted: they take about two hours to generate, so switching a setting and switching it back
+        must not cost that again. Only the newest ARCHIVE_KEEP parked sets per folder are kept."""
+        archive = self.work / "tts-archive"
+        current = read_meta(folder / "meta.json").get("fingerprint") if folder.exists() else None
+        if current == fp:
+            return False
+        if folder.exists():
+            if current:
+                archive.mkdir(parents=True, exist_ok=True)
+                dest = archive / f"{folder.name}-{current}"
+                shutil.rmtree(dest, ignore_errors=True)
+                folder.rename(dest)
+                os.utime(dest, None)
+            else:
+                shutil.rmtree(folder)     # no fingerprint, so no way to know what made it
+        restored = False
+        parked = archive / f"{folder.name}-{fp}"
+        if parked.is_dir():
+            parked.rename(folder)
+            restored = True
+        if archive.is_dir():
+            mine = sorted((d for d in archive.iterdir() if d.is_dir() and d.name.startswith(folder.name + "-")),
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+            for old in mine[ARCHIVE_KEEP:]:
+                shutil.rmtree(old, ignore_errors=True)
+        return restored
+
     def _generate(self, folder: Path, n: int, fp: str, pick, what: str, span: tuple[float, float]):
         """Generate n clips named 000000.wav... Resumable, and extendable if n grows later."""
         meta_path = folder / "meta.json"
-        if folder.exists() and read_meta(meta_path).get("fingerprint") != fp:
-            shutil.rmtree(folder)
+        if self._activate(folder, fp):
+            self.log(f"{what}: brought back the clips made earlier with these settings")
         folder.mkdir(parents=True, exist_ok=True)
         write_meta(meta_path, {"fingerprint": fp})
         existing = {p.stem for p in folder.glob("*.wav")}

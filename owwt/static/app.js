@@ -838,7 +838,7 @@ async function tabTrain(project, el) {
               <option value="all" ${(adv.voices ?? "all") === "all" ? "selected" : ""}>All voices, including accented English</option>
               <option value="english" ${adv.voices === "english" ? "selected" : ""}>American and British voices only</option>
             </select>
-            <div class="hint">Accented voices add variety and help with different speakers</div></div>
+            <div class="hint">Accented voices add variety and help with different speakers. Changing this needs a new set of clips (about 2 hours the first time). The old set is kept, so switching back is instant.</div></div>
         </div>
         <button class="btn ghost small" id="adv-reset">Reset advanced settings</button>
       </details>
