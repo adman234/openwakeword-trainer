@@ -14,6 +14,8 @@ DOWNLOADS_DIR = DATA_DIR / "downloads"
 CUSTOM_BACKGROUND_DIR = DATA_DIR / "background"
 CERT_DIR = DATA_DIR / "certs"
 JOB_DIR = DATA_DIR / "job"
+# Wake word clips to review, e.g. Home Assistant debug recordings trimmed by wake-clip-keeper
+IMPORT_DIR = Path(os.environ.get("IMPORT_DIR", "/import"))
 
 KOKORO_REPO = "hexgrad/Kokoro-82M"
 KOKORO_DIR = ASSET_DIR / "kokoro"

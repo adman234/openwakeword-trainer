@@ -87,6 +87,17 @@ ESPHome devices that detect the wake word themselves (ESP32-S3 devices such as t
 
 The live test in the browser uses the Home Assistant model, so tick both if you want to try the wake word before flashing a device.
 
+### Reviewing wake word clips from Home Assistant
+
+If Home Assistant runs the wake word (openWakeWord) and records its debug audio, every detection is a clip you can learn from. The **Review clips** tab sorts them for you:
+
+1. Map the folder of clips to `/import` (for example the clips folder of [wake-clip-keeper](https://github.com/adman234/-other/tree/claude/affectionate-allen-7amx8d/unraid/wake-clip-keeper), which saves `<time>_<device>_wake.wav` and `_stt.wav` pairs), and set `STT_URI` to the Wyoming speech-to-text server Home Assistant uses, e.g. `tcp://192.168.1.10:10300`.
+2. Press **Analyse**. For each clip it finds the moment the wake word fired (with your latest model, or the end of the clip), asks the speech-to-text server what was said there and afterwards, and suggests *wake word* or *false trigger* with a confidence. For example: heard "turn off the TV" and nobody spoke after it, so a false trigger, 90% sure.
+3. Accept the confident suggestions in one click, then go through the rest: <kbd>Space</kbd> plays the trigger, <kbd>W</kbd> / <kbd>F</kbd> / <kbd>S</kbd> mark it wake word, false trigger or skip, and the next clip plays.
+4. **Add to recordings** copies just the phrase of each real wake word into your wake word recordings, the 3 seconds around each false trigger into other speech, and optionally the whole false-trigger clip into background audio. Train again.
+
+Without `STT_URI` it still works, but only guesses from whether anyone spoke after the trigger. Nothing in `/import` is changed.
+
 ### Presets
 
 | Preset | Generated clips | Steps | Time with an RTX 4070 class GPU |
@@ -119,6 +130,9 @@ Everything is adjustable under *Advanced settings*: clip counts, steps, model si
 | `HF_TOKEN` | empty | Optional Hugging Face token if downloads get rate limited |
 | `NVIDIA_VISIBLE_DEVICES` | `all` | Which GPU to use |
 | `PREVIEW_DEVICE` | `cpu` | Device for pronunciation previews in the web UI (`cuda` to use the GPU) |
+| `IMPORT_DIR` | `/import` | Folder of wake word clips for the Review clips tab |
+| `STT_URI` | empty | Wyoming speech-to-text server for clip review, e.g. `tcp://192.168.1.10:10300` |
+| `STT_LANGUAGE` | `en` | Language sent to the speech-to-text server |
 
 ### What's in `/data`
 
@@ -127,6 +141,7 @@ Everything is adjustable under *Advanced settings*: clip counts, steps, model si
 ├── projects/<wake_word>/
 │   ├── project.json
 │   ├── recordings/{positive,negative,background}/   your clips
+│   ├── review/                                       clip review results and trimmed clips
 │   ├── work/                                         generated clips and cached features (safe to delete)
 │   └── runs/<timestamp>/                             .tflite, .onnx and report.json
 ├── downloads/        shared training data (about 19 GB, plus about 26 GB once you build an ESPHome model)

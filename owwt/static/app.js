@@ -264,7 +264,7 @@ function renderChrome() {
   const pill = $("#job-pill");
   if (job.running) {
     pill.hidden = false;
-    pill.href = job.project_id ? `#/p/${job.project_id}/train` : "#/setup";
+    pill.href = job.project_id ? `#/p/${job.project_id}/${job.kind === "review" ? "review" : "train"}` : "#/setup";
     pill.innerHTML = `<span class="spin"></span>${esc(job.title)} · ${pct(jobFraction(job))}`;
   } else pill.hidden = true;
   const banner = $("#https-banner");
@@ -435,7 +435,7 @@ async function renderNew() {
 
 // ---------------------------------------------------------------------------------------------
 // Project
-const TABS = [["pronounce", "Pronunciation"], ["record", "Record"], ["train", "Train"], ["test", "Test"], ["download", "Download"]];
+const TABS = [["pronounce", "Pronunciation"], ["record", "Record"], ["train", "Train"], ["test", "Test"], ["review", "Review clips"], ["download", "Download"]];
 
 async function renderProject(id, tab) {
   const [project] = await Promise.all([api(`/api/projects/${id}`), system ? null : refreshSystem()]);
@@ -459,9 +459,10 @@ async function renderProject(id, tab) {
     <div id="tab"></div>`;
   onJob((j) => {
     const el = $("#head-status");
-    if (el) el.innerHTML = j.running && j.project_id === id ? `<a class="badge run" href="#/p/${id}/train"><span class="spin"></span> Training ${pct(jobFraction(j))}</a>` : "";
+    const reviewing = j.kind === "review";
+    if (el) el.innerHTML = j.running && j.project_id === id ? `<a class="badge run" href="#/p/${id}/${reviewing ? "review" : "train"}"><span class="spin"></span> ${reviewing ? "Reviewing clips" : "Training"} ${pct(jobFraction(j))}</a>` : "";
   });
-  const views = { pronounce: tabPronounce, record: tabRecord, train: tabTrain, test: tabTest, download: tabDownload };
+  const views = { pronounce: tabPronounce, record: tabRecord, train: tabTrain, test: tabTest, review: tabReview, download: tabDownload };
   await views[tab](project, $("#tab"));
 }
 
@@ -939,7 +940,7 @@ async function tabTrain(project, el) {
           ${j.running && mine
             ? `<button class="btn danger" id="cancel">${icons.stop} Cancel training</button>`
             : `<button class="btn primary big" id="start" ${other ? "disabled" : ""}>${project.runs.length || (mine && j.state === "done") ? "Train again" : "Start training"}</button>`}
-          ${other ? `<span class="muted">Another job is running: ${esc(j.title)}. <a href="${j.project_id ? `#/p/${j.project_id}/train` : "#/setup"}">View it</a></span>` : ""}
+          ${other ? `<span class="muted">Another job is running: ${esc(j.title)}. <a href="${j.project_id ? `#/p/${j.project_id}/${j.kind === "review" ? "review" : "train"}` : "#/setup"}">View it</a></span>` : ""}
           ${!j.running && project.runs.length ? `<span class="muted small">Generated voices and features are cached, so retraining after adding recordings is much quicker.</span>` : ""}
         </div>
         ${mine && j.stages?.length ? `
@@ -1151,6 +1152,230 @@ async function tabTest(project, el) {
     };
   }
   setRun(run);
+}
+
+// Clip review --------------------------------------------------------------------------------
+const REVIEW_FILTERS = [
+  ["review", "Needs a listen"], ["open", "Undecided"], ["wake", "Wake word"], ["false", "False trigger"], ["added", "Added"], ["all", "All"],
+];
+const DECISION_LABEL = { wake: "Wake word", false: "False trigger", skip: "Skip" };
+let reviewFilter = "review";
+let reviewCutoff = 0.9;
+
+async function tabReview(project, el) {
+  let data = await api(`/api/projects/${project.id}/review`);
+  let shown = 50, current = 0, view = [], wasRunning = false;
+  const base = `/api/projects/${project.id}/review`;
+
+  el.innerHTML = `
+    <div class="panel">
+      <h2>Review clips from Home Assistant</h2>
+      <p class="muted">Every clip here is a time your wake word fired. This sorts them into real wake words and false triggers, using your latest model to find the moment it fired and your speech-to-text server to hear what was said then and afterwards. Check the uncertain ones, then add them to your recordings and train again: false triggers become examples of what not to wake on.</p>
+      <div id="rv-status" class="rv-status"></div>
+      <div id="rv-job" class="mt"></div>
+    </div>
+    <div class="panel" id="rv-summary"></div>
+    <div class="panel">
+      <div class="row between wrap gap">
+        <div class="seg" id="rv-filters" style="margin-bottom:0"></div>
+        <span class="muted xsmall">Keys: <kbd>W</kbd> wake word · <kbd>F</kbd> false trigger · <kbd>S</kbd> skip · <kbd>Space</kbd> play · <kbd>A</kbd> play all · <kbd>J</kbd>/<kbd>K</kbd> next/previous</span>
+      </div>
+      <div id="rv-list" class="rv-list mt"></div>
+    </div>`;
+
+  const needsListen = (i) => !i.decision && i.confidence < reviewCutoff;
+  const matches = (i, f) => ({
+    review: needsListen(i), open: !i.decision, wake: (i.decision || i.label) === "wake" && i.decision !== "skip",
+    false: (i.decision || i.label) === "false" && i.decision !== "skip", added: i.imported.length > 0, all: true,
+  })[f];
+  const toAdd = () => data.items.filter((i) => (i.decision === "wake" && !i.imported.includes("positive")) ||
+    (i.decision === "false" && !i.imported.includes("negative"))).length;
+
+  function renderStatus() {
+    const s = data;
+    const folder = s.import_dir_exists
+      ? `<b>${s.clips_found}</b> clips in <code>${esc(s.import_dir)}</code>${s.new_clips ? `, <b>${s.new_clips}</b> not analysed yet` : ", all analysed"}`
+      : `<span class="warn-text">The folder <code>${esc(s.import_dir)}</code> doesn't exist.</span> Map your clips folder (for example wake-clip-keeper's) to it in the container settings.`;
+    const stt = s.stt_configured
+      ? `Speech-to-text: <code>${esc(s.stt_uri)}</code>`
+      : `<span class="warn-text">No speech-to-text server.</span> Set <code>STT_URI</code> (e.g. <code>tcp://192.168.1.10:10300</code>, the Wyoming STT server Home Assistant uses) so it can hear what was said. Without it, suggestions are only rough guesses.`;
+    const model = s.model_run ? `Scored with the model from ${esc(s.model_run)}` : "No trained model yet: clips are assumed to trigger at their end, where Home Assistant's recording stops.";
+    $("#rv-status", el).innerHTML = `<ul class="rv-facts"><li>${folder}</li><li>${stt}</li><li class="muted">${model}</li></ul>`;
+  }
+
+  function renderJob(j) {
+    const area = $("#rv-job", el);
+    if (!area) return;
+    const mine = j.kind === "review" && j.project_id === project.id;
+    if (mine && j.running) {
+      wasRunning = true;
+      area.innerHTML = `<div class="row gap wrap"><span class="spin"></span><span>${esc(j.message || "Analysing")}</span><div class="bar grow"><div style="width:${jobFraction(j) * 100}%"></div></div>
+        <button class="btn small danger" id="rv-cancel">${icons.stop} Stop</button></div>`;
+      $("#rv-cancel", area).onclick = () => api("/api/job/cancel", { body: {} });
+      return;
+    }
+    if (mine && wasRunning) {
+      wasRunning = false;
+      reload();
+    }
+    const other = j.running && !mine;
+    const failed = mine && j.state === "failed" ? `<div class="error-box">Analysis failed: ${esc(j.error || "unknown error")}</div>` : "";
+    area.innerHTML = `${failed}<div class="row gap wrap">
+      <button class="btn primary" id="rv-run" ${other || !data.new_clips ? "disabled" : ""}>Analyse ${data.new_clips || ""} new clip${data.new_clips === 1 ? "" : "s"}</button>
+      <button class="btn ghost" id="rv-redo" ${other || !data.items.length ? "disabled" : ""}>Analyse everything again</button>
+      ${other ? `<span class="muted small">Waiting for another job: ${esc(j.title)}</span>` : `<span class="muted small">Re-analyse after training a new model: it scores the clips again.</span>`}
+    </div>`;
+    const start = async (redo) => {
+      try { await api(`${base}/analyse`, { body: { redo_all: redo } }); pollJobNow(); } catch (e) { toast(e.message, "error"); }
+    };
+    $("#rv-run", area).onclick = () => start(false);
+    $("#rv-redo", area).onclick = () => start(true);
+  }
+
+  function renderSummary() {
+    const items = data.items;
+    const count = (fn) => items.filter(fn).length;
+    const added = { positive: count((i) => i.imported.includes("positive")), negative: count((i) => i.imported.includes("negative")) };
+    $("#rv-summary", el).innerHTML = items.length ? `
+      <div class="tiles">
+        ${tile(count((i) => (i.decision || i.label) === "wake" && i.decision !== "skip"), "Wake word", "Suggested or confirmed")}
+        ${tile(count((i) => (i.decision || i.label) === "false" && i.decision !== "skip"), "False triggers", "Suggested or confirmed")}
+        ${tile(count(needsListen), "Need a listen", `Undecided and under ${Math.round(reviewCutoff * 100)}% sure`)}
+        ${tile(`${added.positive} + ${added.negative}`, "Added to recordings", "Wake word + false trigger clips")}
+      </div>
+      <div class="row gap wrap">
+        <label class="small">Trust suggestions at or above <input type="number" id="rv-cut" class="input rv-num" min="50" max="99" value="${Math.round(reviewCutoff * 100)}">%</label>
+        <button class="btn" id="rv-accept" ${count((i) => !i.decision && i.confidence >= reviewCutoff) ? "" : "disabled"}>${icons.check} Accept ${count((i) => !i.decision && i.confidence >= reviewCutoff)} confident suggestions</button>
+      </div>
+      <div class="row gap wrap mt">
+        <button class="btn primary" id="rv-import" ${toAdd() ? "" : "disabled"}>Add ${toAdd()} confirmed clip${toAdd() === 1 ? "" : "s"} to recordings</button>
+        <label class="check"><input type="checkbox" id="rv-bg" checked> Also keep each false trigger's whole clip as background audio</label>
+        <a class="btn ghost" href="#/p/${project.id}/train">Go to training</a>
+      </div>
+      <p class="hint">Wake words go in as wake word recordings (just the phrase), false triggers as other speech (the 3 seconds around the trigger). Changing your mind later removes what a clip added.</p>`
+      : `<p class="muted">Nothing analysed yet.${data.new_clips ? " Press <b>Analyse</b> above." : ""}</p>`;
+    if (!items.length) return;
+    $("#rv-cut", el).onchange = (e) => {
+      reviewCutoff = Math.min(0.99, Math.max(0.5, (+e.target.value || 90) / 100));
+      renderSummary(); renderList();
+    };
+    $("#rv-accept", el).onclick = async () => {
+      const { accepted } = await api(`${base}/accept`, { body: { min_confidence: reviewCutoff } });
+      toast(`Accepted ${accepted} suggestions`, "ok");
+      reload();
+    };
+    $("#rv-import", el).onclick = async (e) => {
+      e.target.disabled = true;
+      try {
+        const c = await api(`${base}/import`, { body: { background: $("#rv-bg", el).checked } });
+        toast(`Added ${c.positive} wake word, ${c.negative} false trigger and ${c.background} background clips. Train again to use them.`, "ok", 7000);
+      } catch (err) { toast(err.message, "error"); }
+      reload();
+    };
+  }
+
+  function rowHtml(i, n) {
+    const shownAs = i.decision || i.label;
+    const conf = i.decision ? "" : `<span class="rv-conf ${i.confidence >= reviewCutoff ? "" : "low"}">${Math.round(i.confidence * 100)}% sure</span>`;
+    const buttons = ["wake", "false", "skip"].map((d) =>
+      `<button class="btn small ${i.decision === d ? (d === "wake" ? "primary" : d === "false" ? "danger-on" : "on") : "ghost"}" data-act="${d}">${DECISION_LABEL[d]}</button>`).join("");
+    const heard = i.transcript != null ? `<div class="small">Heard: ${i.transcript ? `“${esc(i.transcript)}”` : "<span class='muted'>nothing</span>"}</div>` : "";
+    const after = i.command ? `<div class="small muted">Then: “${esc(i.command)}”</div>` : "";
+    return `<div class="rv-row ${n === current ? "current" : ""}" data-n="${n}">
+      <div class="rv-play">
+        <button class="icon-btn" data-play="neg" title="Play the trigger (Space)">${icons.play}</button>
+        <button class="btn ghost small" data-play="full" ${i.available ? "" : "disabled"} title="Play the whole clip">All</button>
+        ${i.stt_rel ? `<button class="btn ghost small" data-play="command" ${i.available ? "" : "disabled"} title="What was said after it">After</button>` : ""}
+      </div>
+      <div class="rv-main">
+        <div class="row gap wrap">
+          <span class="tag ${shownAs === "wake" ? "positive" : shownAs === "false" ? "negative" : ""}">${i.decision ? "" : "Looks like: "}${DECISION_LABEL[shownAs] || shownAs}</span>
+          ${conf}
+          ${i.imported.length ? `<span class="tag ok">Added</span>` : ""}
+          <span class="muted xsmall rv-name" title="${esc(i.rel)}">${esc(i.rel)}</span>
+        </div>
+        ${heard}${after}
+        <div class="muted xsmall">${(i.reasons || []).map(esc).join(" · ")}</div>
+      </div>
+      <div class="rv-actions">${buttons}</div>
+    </div>`;
+  }
+
+  function renderFilters() {
+    $("#rv-filters", el).innerHTML = REVIEW_FILTERS.map(([f, label]) =>
+      `<button data-f="${f}" class="${f === reviewFilter ? "active" : ""}">${label}<span class="count">${data.items.filter((i) => matches(i, f)).length}</span></button>`).join("");
+    $$("#rv-filters button", el).forEach((b) => b.onclick = () => { reviewFilter = b.dataset.f; current = 0; shown = 50; renderFilters(); renderList(); });
+  }
+
+  function renderList() {
+    view = data.items.filter((i) => matches(i, reviewFilter))
+      .sort((a, b) => (!!a.decision - !!b.decision) || a.confidence - b.confidence || a.rel.localeCompare(b.rel));
+    current = Math.min(current, Math.max(0, view.length - 1));
+    const list = $("#rv-list", el);
+    list.innerHTML = view.length
+      ? view.slice(0, shown).map(rowHtml).join("") + (view.length > shown ? `<button class="btn ghost wide" id="rv-more">Show ${Math.min(50, view.length - shown)} more of ${view.length - shown}</button>` : "")
+      : `<p class="muted">${data.items.length ? "Nothing here." : ""}</p>`;
+    $("#rv-more", list)?.addEventListener("click", () => { shown += 50; renderList(); });
+  }
+
+  const play = (n, part = "neg") => {
+    const i = view[n];
+    if (i) playUrl(`${base}/${i.id}/${part}?t=${Date.now()}`);
+  };
+  function select(n, scroll = true) {
+    if (!view.length) return;
+    current = Math.max(0, Math.min(view.length - 1, n));
+    if (current >= shown) { shown = current + 10; renderList(); }
+    $$(".rv-row", el).forEach((r) => r.classList.toggle("current", +r.dataset.n === current));
+    if (scroll) $(`.rv-row[data-n="${current}"]`, el)?.scrollIntoView({ block: "nearest" });
+  }
+  async function decide(n, decision) {
+    const i = view[n];
+    if (!i) return;
+    const value = i.decision === decision ? null : decision;
+    try {
+      await api(`${base}/decisions`, { body: { decisions: { [i.id]: value } } });
+    } catch (e) { return toast(e.message, "error"); }
+    if (i.decision !== value) i.imported = [];
+    i.decision = value;
+    const stillShown = matches(i, reviewFilter);
+    renderFilters(); renderSummary(); renderList();
+    select(stillShown ? n + 1 : n);
+    // Keep the flow going: listen, press a key, hear the next one
+    if (value && view[current] && view[current].id !== i.id) play(current);
+  }
+
+  $("#rv-list", el).onclick = (e) => {
+    const row = e.target.closest(".rv-row");
+    if (!row) return;
+    const n = +row.dataset.n;
+    const btn = e.target.closest("[data-act],[data-play]");
+    if (btn?.dataset.play) { select(n, false); play(n, btn.dataset.play); }
+    else if (btn?.dataset.act) { select(n, false); decide(n, btn.dataset.act); }
+    else select(n, false);
+  };
+  const onKey = (e) => {
+    if (e.target.closest("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === "w") decide(current, "wake");
+    else if (k === "f") decide(current, "false");
+    else if (k === "s") decide(current, "skip");
+    else if (k === " ") { e.preventDefault(); play(current); }
+    else if (k === "a") play(current, "full");
+    else if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); select(current + 1); }
+    else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); select(current - 1); }
+    else return;
+  };
+  document.addEventListener("keydown", onKey);
+  cleanups.push(() => document.removeEventListener("keydown", onKey));
+
+  async function reload() {
+    data = await api(`/api/projects/${project.id}/review`);
+    renderStatus(); renderSummary(); renderFilters(); renderList(); renderJob(job);
+  }
+  renderStatus(); renderSummary(); renderFilters(); renderList();
+  onJob(renderJob);
+  every(5000, () => { if (job.running && job.kind === "review" && job.project_id === project.id) reload(); });
 }
 
 // Download -----------------------------------------------------------------------------------

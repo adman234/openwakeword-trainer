@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import adversarial, assets, micro, projects
+from . import adversarial, assets, micro, projects, review
 from .audio import decode, level_report, trim_silence, wav_bytes
 from .config import (ADVANCED_DEFAULTS, CUSTOM_BACKGROUND_DIR, DATA_DIR, HTTP_PORT, HTTPS_PORT, OUTPUT_DIR, PRESETS,
                      RECORDING_KINDS, SR, TFLITE_PYTHON, VERSION)
@@ -308,6 +308,60 @@ def esphome_model(filename: str):
 @app.post("/api/projects/{pid}/runs/{run_id}/publish")
 def publish_run(pid: str, run_id: str):
     return {"copied": projects.publish(pid, run_id)}
+
+
+# Clip review ----------------------------------------------------------------------------------
+@app.get("/api/projects/{pid}/review")
+def get_review(pid: str):
+    return review.summary(pid)
+
+
+class AnalyseBody(BaseModel):
+    redo_all: bool = False
+
+
+@app.post("/api/projects/{pid}/review/analyse")
+def analyse_clips(pid: str, body: AnalyseBody):
+    project = projects.load(pid)
+    args = [pid, "all"] if body.redo_all else [pid]
+    return jobs.start("review", "owwt.review", args, f"Reviewing clips for \"{project['phrase']}\"", project_id=pid)
+
+
+class DecisionsBody(BaseModel):
+    decisions: dict[str, str | None]
+
+
+@app.post("/api/projects/{pid}/review/decisions")
+def set_review_decisions(pid: str, body: DecisionsBody):
+    review.set_decisions(pid, body.decisions)
+    return {"ok": True}
+
+
+class AcceptBody(BaseModel):
+    min_confidence: float = 0.9
+
+
+@app.post("/api/projects/{pid}/review/accept")
+def accept_review_suggestions(pid: str, body: AcceptBody):
+    return {"accepted": review.accept_suggestions(pid, max(0.0, min(1.0, body.min_confidence)))}
+
+
+class ImportBody(BaseModel):
+    background: bool = True
+
+
+@app.post("/api/projects/{pid}/review/import")
+def import_review_clips(pid: str, body: ImportBody):
+    status = jobs.current()
+    if status.get("running") and status.get("project_id") == pid and status.get("kind") == "train":
+        raise RuntimeError("Wait for training to finish before adding clips")
+    return review.import_decided(pid, body.background)
+
+
+@app.get("/api/projects/{pid}/review/{cid}/{part}")
+def review_audio(pid: str, cid: str, part: str):
+    return FileResponse(review.clip_audio_path(pid, cid, part), media_type="audio/wav",
+                        headers={"Cache-Control": "no-cache"})
 
 
 # Live test ------------------------------------------------------------------------------------

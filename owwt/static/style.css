@@ -346,6 +346,27 @@ details[open] > summary { margin-bottom: 10px; }
 .score-bar > i { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--warn); }
 .tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .tag.positive { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.tag.negative { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+.tag.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+
+/* Clip review */
+.rv-facts { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
+.rv-list { display: grid; gap: 4px; }
+.rv-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  padding: 10px 12px; border-radius: 10px; border: 1.5px solid transparent;
+}
+.rv-row:hover { background: var(--panel-2); }
+.rv-row.current { border-color: var(--accent); background: var(--accent-soft); }
+.rv-play, .rv-actions { display: flex; gap: 6px; align-items: center; }
+.rv-main { display: grid; gap: 3px; min-width: 0; }
+.rv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.rv-conf { font-size: 12px; font-weight: 600; color: var(--ok); }
+.rv-conf.low { color: var(--warn); }
+.rv-num { width: 70px; display: inline-block; padding: 4px 8px; margin: 0 4px; }
+.btn.on { background: var(--panel-2); border-color: var(--muted); }
+.btn.danger-on { background: var(--bad); border-color: var(--bad); color: #fff; }
+kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--panel-2); }
 
 .code {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
@@ -378,4 +399,6 @@ details[open] > summary { margin-bottom: 10px; }
   .prompt-text { font-size: 26px; }
   .score-row { grid-template-columns: auto 1fr 44px; }
   .score-row .tag { display: none; }
+  .rv-row { grid-template-columns: minmax(0, 1fr); }
+  .rv-actions { flex-wrap: wrap; }
 }
