@@ -69,6 +69,9 @@ ADVANCED_DEFAULTS = {
     "max_negative_weight": 1500,
     "target_fp_per_hour": 0.2,
     "real_weight": 0.25,
+    # Where in the first (long) phase checkpoints start being compared, as a percent of its steps.
+    # It was fixed at 75, which hid any better checkpoint from earlier in training.
+    "eval_start_percent": 25.0,
     "voices": "all",
     "n_blocks": 1,
     "micro_target_faph": 0.5,
@@ -82,6 +85,7 @@ ADVANCED_LIMITS = {
     "max_negative_weight": (1, 10000),
     "target_fp_per_hour": (0.01, 10.0),   # floats: the clamp casts to the bound's type, and int(0.5) is 0
     "real_weight": (0, 0.9),
+    "eval_start_percent": (0.0, 95.0),
     "n_blocks": (1, 4),
     "micro_steps": (1000, 200000),
     "micro_target_faph": (0.01, 10.0),

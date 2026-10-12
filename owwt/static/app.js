@@ -786,6 +786,7 @@ const ADVANCED_FIELDS = [
   ["target_fp_per_hour", "Target false activations per hour", "Used to pick the best checkpoint and threshold"],
   ["max_negative_weight", "Negative weight", "Higher means fewer false activations but more misses"],
   ["real_weight", "Share of your recordings", "Fraction of each batch of wake word examples taken from your recordings (0 to 0.9)"],
+  ["eval_start_percent", "Start comparing checkpoints at (%)", "Where in the main training phase checkpoints start being compared. Earlier gives more to choose from but adds a few minutes (default 25)"],
   ["micro_steps", "ESPHome training steps", "microWakeWord steps. More can be better but it trains on the CPU"],
   ["micro_target_faph", "ESPHome false accepts per hour target", "Used to choose the probability cutoff written into the JSON"],
 ];

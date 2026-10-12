@@ -245,6 +245,19 @@ def _selection_key(m: dict, target_fp: float) -> tuple:
     return (0, m["target_recall"], -m["target_fp_per_hour"])
 
 
+def eval_schedule(n_steps: int, phase: int, start_percent: float) -> list[int]:
+    """Steps at which a checkpoint is evaluated and kept.
+
+    Phase 1 starts at `start_percent` of its steps. Evaluations stay about as dense as they were when
+    the start was fixed at 75% (16 across the last quarter), so starting earlier means more of them,
+    capped at 64. Later phases are short and are evaluated from their first step."""
+    if phase > 0:
+        return sorted(set(np.linspace(0, n_steps - 1, 8).astype(int).tolist()))
+    first = min(int(n_steps * start_percent / 100), n_steps - 1)
+    count = max(16, min(64, round(16 * (n_steps - first) / max(1.0, 0.25 * n_steps))))
+    return sorted(set(np.linspace(first, n_steps - 1, count).astype(int).tolist()))
+
+
 def train(data: TrainingData, settings: dict, device, log, progress, should_stop=lambda: False):
     torch.manual_seed(1234)
     n_frames = data.n_frames
@@ -283,8 +296,7 @@ def train(data: TrainingData, settings: dict, device, log, progress, should_stop
             max_weight *= 2
             log(f"False positives above target ({best_fp:.2f}/h > {target_fp}/h), doubling negative weight to {max_weight:.0f}")
         log(f"Phase {phase + 1}/3: {n_steps} steps, learning rate {lr:g}")
-        first_eval = int(n_steps * 0.75) if phase == 0 else 0
-        eval_at = set(np.linspace(first_eval, n_steps - 1, 16 if phase == 0 else 8).astype(int).tolist())
+        eval_at = set(eval_schedule(n_steps, phase, float(settings.get("eval_start_percent", 75.0))))
         warmup, hold = n_steps // 5, n_steps // 3
         # openWakeWord ramps the negative weight across 50k steps. Ramping as fast on a short run
         # overwhelms the positives before they are learned (recall collapses to 0), so short runs

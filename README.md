@@ -108,7 +108,7 @@ Without `STT_URI` it still works, but only guesses from whether anyone spoke aft
 
 Most of the time goes into Kokoro generating clips, and those are cached: retraining after adding recordings or changing training settings skips straight to the fast parts, which take about 10 minutes. On CPU only, expect several times longer (Kokoro is around 0.2 s per clip on a modern desktop CPU).
 
-Everything is adjustable under *Advanced settings*: clip counts, steps, model size, target false activations per hour, negative weighting, how much weight your recordings get, and which voices are used.
+Everything is adjustable under *Advanced settings*: clip counts, steps, model size, target false activations per hour, negative weighting, how much weight your recordings get, which voices are used, and how early in training checkpoints start being compared (default 25% of the main phase).
 
 ## How it works
 
