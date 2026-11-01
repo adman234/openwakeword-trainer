@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  # Weekly rebuild so :latest picks up security fixes in the python:3.11-slim
+  # base image. Layers come from the registry cache, so if the base image
+  # hasn't changed nothing is re-downloaded by Unraid.
+  schedule:
+    - cron: "7 5 * * 2"
   workflow_dispatch:
 
 permissions:
@@ -47,3 +52,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Keeps unchanged layers byte-identical between builds, so Unraid only
+          # re-downloads layers that actually changed (the GitHub Actions cache
+          # is too small for the CUDA PyTorch layer).
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true

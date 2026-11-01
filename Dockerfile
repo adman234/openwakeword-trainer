@@ -3,6 +3,7 @@ FROM python:3.11-slim-bookworm
 
 # cu128 wheels support NVIDIA GPUs from Turing (RTX 20xx, GTX 16xx) up to Blackwell (RTX 50xx).
 # For Pascal cards (GTX 10xx, Quadro P series) build with: --build-arg TORCH_CUDA=cu126
+# renovate: datasource=pypi depName=torch
 ARG TORCH_VERSION=2.8.0
 ARG TORCH_CUDA=cu128
 
