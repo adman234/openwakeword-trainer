@@ -16,7 +16,7 @@ tqdm==4.70.1
 huggingface_hub==2.2.0
 fastapi==0.148.0
 uvicorn[standard]==0.54.0
-python-multipart==0.0.32
+python-multipart==0.0.33
 # microWakeWord (ESPHome) spectrogram features; training itself runs in the TensorFlow venv
 pymicro-features==2.0.2
 mmap_ninja==0.9.0
